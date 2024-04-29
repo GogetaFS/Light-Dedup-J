@@ -796,9 +796,9 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	nova_memlock_inode(env.sb, env.pi, &irq_flags);
 
 	/* Free the overlap blocks after the write is committed */
-	ret = nova_reassign_file_tree(env.sb, env.sih, env.begin_tail);
-	if (ret)
-		goto err_out2;
+	// ret = nova_reassign_file_tree(env.sb, env.sih, env.begin_tail);
+	// if (ret)
+	// 	goto err_out2;
 
 	env.inode->i_blocks = env.sih->i_blocks;
 

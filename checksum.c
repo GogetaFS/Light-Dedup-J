@@ -165,7 +165,7 @@ void nova_update_entry_csum(void *entry)
 	size_t entry_len = CACHELINE_SIZE;
 
 	if (metadata_csum == 0)
-		goto flush;
+		goto out;
 
 	type = nova_get_entry_type(entry);
 	csum = nova_calc_entry_csum(entry);
@@ -205,7 +205,8 @@ void nova_update_entry_csum(void *entry)
 flush:
 	if (entry_len > 0)
 		nova_flush_buffer(entry, entry_len, 0);
-
+out:
+	return;
 }
 
 int nova_update_alter_entry(struct super_block *sb, void *entry)
@@ -457,15 +458,14 @@ int nova_check_inode_integrity(struct super_block *sb, u64 ino, u64 pi_addr,
 {
 	struct nova_inode *pi, *alter_pi, alter_copy, *alter_pic;
 	int inode_bad, alter_bad;
-	int ret;
+	int ret = 0;
 
 	pi = (struct nova_inode *)nova_get_block(sb, pi_addr);
-
-	ret = memcpy_mcsafe(pic, pi, sizeof(struct nova_inode));
 
 	if (metadata_csum == 0)
 		return ret;
 
+	ret = memcpy_mcsafe(pic, pi, sizeof(struct nova_inode));
 	alter_pi = (struct nova_inode *)nova_get_block(sb, alter_pi_addr);
 
 	if (ret < 0) { /* media error */

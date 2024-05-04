@@ -23,6 +23,8 @@
 #define __SUPER_H
 
 #include "table.h"
+#include "rhashtable-ext.h"
+
 /*
  * Structure of the NOVA super block in PMEM
  *
@@ -210,10 +212,10 @@ struct nova_sb_info {
 	unsigned long	block_start;
 	unsigned long	block_end;
 
-	unsigned long region_start;
-	unsigned long region_blocknr_start;
-	unsigned long first_counter_block_start;
-	unsigned long entry_refcount_record_start;
+	// unsigned long region_start;
+	// unsigned long region_blocknr_start;
+	// unsigned long first_counter_block_start;
+	// unsigned long entry_refcount_record_start;
 	unsigned long deref_table;
 
 	struct light_dedup_meta light_dedup_meta;
@@ -223,32 +225,32 @@ static inline struct nova_sb_info *NOVA_SB(struct super_block *sb)
 {
 	return sb->s_fs_info;
 }
+
 static inline struct nova_sb_info *
 light_dedup_meta_to_sbi(struct light_dedup_meta *meta)
 {
 	return container_of(meta, struct nova_sb_info, light_dedup_meta);
 }
-static inline struct nova_sb_info *
-entry_allocator_to_sbi(struct entry_allocator *allocator)
-{
-	return light_dedup_meta_to_sbi(
-		entry_allocator_to_light_dedup_meta(allocator));
-}
+
+// static inline struct nova_sb_info *
+// entry_allocator_to_sbi(struct entry_allocator *allocator)
+// {
+// 	return light_dedup_meta_to_sbi(
+// 		entry_allocator_to_light_dedup_meta(allocator));
+// }
 
 static inline void
 nova_deref_blocks(struct super_block *sb, unsigned long blocknr,
 	unsigned long num)
 {
 	struct nova_sb_info *sbi = NOVA_SB(sb);
-	struct nova_pmm_entry *last_pentry = NULL;
+	struct nova_rht_entry *last_pentry = NULL;
+	
 	while (num) {
 		light_dedup_decr_ref(&sbi->light_dedup_meta, blocknr,
 			&last_pentry);
 		num -= 1;
 		blocknr += 1;
-	}
-	if (last_pentry) {
-		nova_flush_cacheline(last_pentry, true);
 	}
 }
 
@@ -278,16 +280,19 @@ nova_get_blocknr_off(unsigned long blocknr)
 {
 	return (u64)blocknr << PAGE_SHIFT;
 }
+
 static inline void *nova_sbi_get_block(struct nova_sb_info *sbi, u64 block)
 {
 	struct nova_super_block *ps = nova_sbi_get_super(sbi);
 	return block ? ((void *)ps + block) : NULL;
 }
+
 static inline void *
 nova_sbi_blocknr_to_addr(struct nova_sb_info *sbi, unsigned long blocknr)
 {
 	return nova_sbi_get_block(sbi, nova_get_blocknr_off(blocknr));
 }
+
 static inline struct nova_recover_meta *
 nova_get_recover_meta(struct nova_sb_info *sbi)
 {

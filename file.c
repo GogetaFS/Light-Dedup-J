@@ -25,8 +25,8 @@
 #include "inode.h"
 
 DEFINE_PER_CPU(uint8_t, stream_trust_degree_per_cpu);
-DEFINE_PER_CPU(struct nova_pmm_entry *, last_accessed_fpentry_per_cpu);
-DEFINE_PER_CPU(struct nova_pmm_entry *, last_new_fpentry_per_cpu);
+DEFINE_PER_CPU(struct nova_rht_entry *, last_accessed_fpentry_per_cpu);
+// DEFINE_PER_CPU(struct nova_pmm_entry *, last_new_fpentry_per_cpu);
 
 static inline int nova_can_set_blocksize_hint(struct inode *inode,
 	struct nova_inode *pi, loff_t new_size)
@@ -577,6 +577,9 @@ static int advance(struct cow_write_env *env, size_t written,
 		env->epoch_id, env->pos >> env->sb->s_blocksize_bits, wp->num,
 		wp->blocknr, env->time, file_size);
 
+	// incorporate fp into file write entry
+	env->entry_data.fp = wp->normal.base.fp;
+
 	ret = nova_append_file_write_entry(env->sb, env->pi, env->inode,
 				&env->entry_data, &env->update);
 	if (ret) {
@@ -698,14 +701,16 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 
 	cpu = get_cpu();
 	wp.normal.last_accessed = per_cpu(last_accessed_fpentry_per_cpu, cpu);
-	wp.normal.last_new_entries[0] = per_cpu(last_new_fpentry_per_cpu, cpu);
-	wp.normal.last_new_entries[1] = NULL_PENTRY;
+	
+	// wp.normal.last_new_entries[0] = per_cpu(last_new_fpentry_per_cpu, cpu);
+	// wp.normal.last_new_entries[1] = NULL_PENTRY;
+
 	wp.stream_trust_degree = per_cpu(stream_trust_degree_per_cpu, cpu);
 	put_cpu();
-	wp.normal.last_ref_entries[0] = NULL_PENTRY;
-	wp.normal.last_ref_entries[1] = NULL_PENTRY;
-	wp.normal.dirty_map_blocknr_to_pentry = NULL;
+	// wp.normal.last_ref_entries[0] = NULL_PENTRY;
+	// wp.normal.last_ref_entries[1] = NULL_PENTRY;
 	wp.prefetched_blocknr[0] = wp.prefetched_blocknr[1] = 0;
+	
 	if (offset != 0) {
 		bytes = env.sb->s_blocksize - offset;
 		if (bytes > wp.len)
@@ -772,20 +777,22 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		if (ret < 0)
 			goto err_out2;
 	}
-	nova_flush_entry_if_not_null(wp.normal.last_ref_entries[0], false);
-	nova_flush_entry_if_not_null(wp.normal.last_ref_entries[1], false);
+	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[0], false);
+	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[1], false);
 	cpu = get_cpu();
 	per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp.normal.last_accessed;
-	per_cpu(last_new_fpentry_per_cpu, cpu) = wp.normal.last_new_entries[0];
+	// per_cpu(last_new_fpentry_per_cpu, cpu) = wp.normal.last_new_entries[0];
 	per_cpu(stream_trust_degree_per_cpu, cpu) = wp.stream_trust_degree;
 	put_cpu();
-	if (!in_the_same_cacheline(wp.normal.last_new_entries[0],
-			wp.normal.last_new_entries[1]))
-		nova_flush_entry_if_not_null(wp.normal.last_new_entries[1],
-			false);
-	if (wp.normal.dirty_map_blocknr_to_pentry != NULL)
-		nova_flush_cacheline(wp.normal.dirty_map_blocknr_to_pentry,
-			false);
+	
+	// if (!in_the_same_cacheline(wp.normal.last_new_entries[0],
+	// 		wp.normal.last_new_entries[1]))
+	// 	nova_flush_entry_if_not_null(wp.normal.last_new_entries[1],
+	// 		false);
+	
+	// if (wp.normal.dirty_map_blocknr_to_pentry != NULL)
+	// 	nova_flush_cacheline(wp.normal.dirty_map_blocknr_to_pentry,
+	// 		false);
 
 	env.sih->i_blocks += (num_blocks <<
 		(blk_type_to_shift[env.sih->i_blk_type] -
@@ -817,6 +824,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	generic_cache_free(&meta->kbuf_cache, kbuf_node);
 	atomic64_fetch_sub_relaxed(1, &meta->thread_num);
 	return env.written;
+
 err_out2:
 	// TODO: Make sure that the clean up does not fail.
 	if (wp.blocknr_next != 0) {

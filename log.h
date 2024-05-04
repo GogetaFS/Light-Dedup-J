@@ -83,8 +83,11 @@ struct nova_file_write_entry {
 	__le64	trans_id;
 	__le32	csumpadding;
 	__le32	csum;
+
+	/* For Light-Dedup */
+	struct nova_fp fp;
 } __attribute((__packed__));
-_Static_assert(sizeof(struct nova_file_write_entry) == 64, "!!!");
+_Static_assert(sizeof(struct nova_file_write_entry) == 72, "!!!");
 
 #define WENTRY(entry)	((struct nova_file_write_entry *) entry)
 

@@ -28,27 +28,30 @@ struct nova_write_para_base {
 	struct nova_fp fp;
 	int64_t refcount;
 };
+
 struct nova_write_para_normal {
 	// Because C does not support inheritance.
 	struct nova_write_para_base base;
 	const void *addr;
 	unsigned long blocknr;
-	struct nova_pmm_entry *pentry;
+	struct nova_rht_entry *pentry;
+	
 	// Two last not flushed referenced entries.
 	// 0 is the last. 1 is the second to last.
 	// The two fpentries should be flushed before
 	// committing the corresponding write entry to guarantee persistency,
 	// so that the corresponding block will not be regarded as a block
 	// without deduplication.
-	struct nova_pmm_entry *last_ref_entries[2];
+	// struct nova_rht_entry *last_ref_entries[2];
 	// Two last not flushed newly allocated entries.
 	// 0 is the last. 1 is the second to last.
 	// Maintained here to make sure that the newly allocated entry is
 	// flushed after its hint is written.
-	struct nova_pmm_entry *last_new_entries[2];
-	__le64 *dirty_map_blocknr_to_pentry;
+	// struct nova_rht_entry *last_new_entries[2];
+
+	// __le64 *dirty_map_blocknr_to_pentry;
 	// Last accessed entry to provide hint for the next entry.
-	struct nova_pmm_entry *last_accessed;
+	struct nova_rht_entry *last_accessed;
 };
 struct nova_write_para_rewrite {
 	struct nova_write_para_normal normal;
@@ -78,18 +81,16 @@ struct light_dedup_meta {
 	struct super_block *sblock;
 	struct generic_cache kbuf_cache;
 	struct nova_fp_strong_ctx fp_ctx;
-	struct entry_allocator entry_allocator;
+	// FP to PBN
 	struct rhashtable rht;
 	struct kmem_cache *rht_entry_cache;
+	// PBN to FP
+	struct rb_root revmap;
+	spinlock_t revmap_lock;
+	struct kmem_cache *revmap_entry_cache;
+
 	atomic64_t thread_num;
 };
-
-static inline struct light_dedup_meta *
-entry_allocator_to_light_dedup_meta(struct entry_allocator *allocator)
-{
-	return container_of(
-		allocator, struct light_dedup_meta, entry_allocator);
-}
 
 struct kbuf_obj {
 	struct llist_node node;
@@ -100,7 +101,7 @@ int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr,
 	struct nova_write_para_normal *wp);
 
 void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
-	struct nova_pmm_entry **last_pentry);
+	struct nova_rht_entry **last_pentry);
 long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 	unsigned long blocknr);
 

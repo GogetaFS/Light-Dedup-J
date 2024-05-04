@@ -109,7 +109,7 @@
 extern unsigned int blk_type_to_shift[NOVA_BLOCK_TYPE_MAX];
 extern unsigned int blk_type_to_size[NOVA_BLOCK_TYPE_MAX];
 
-
+#define DEDUP_FILE_MAP 1
 
 #define	MMAP_WRITE_BIT	0x20UL	// mmaped for write
 #define	IS_MAP_WRITE(p)	((p) & (MMAP_WRITE_BIT))

@@ -23,6 +23,20 @@ struct nova_sb_info;
 typedef uint64_t entrynr_t;
 typedef uint32_t regionnr_t;
 
+// FP to PBN mapping
+struct nova_rht_entry {
+	struct rhash_head node;
+	struct nova_fp fp;
+	__le64 blocknr;
+	atomic64_t refcount;
+	// Lowest 3 bits are unsigned trust degree (<= 7). Initially 4.
+	// For each result matching the hint, the trust degree += 1
+	// For each result mismatching the hint, the trust degree -= 2.
+	// If the resulting trust degree < 0, then the offset is updated.
+	// If the trust degree < 4, then the hint is not taken.
+	atomic64_t next_hint;
+};
+
 struct nova_pmm_entry {
 	struct nova_fp fp;	// TODO: cpu_to_le64?
 	__le64 blocknr;
@@ -38,7 +52,7 @@ _Static_assert(sizeof(atomic64_t) == 8, "atomic64_t not 8B!");
 #define TRUST_DEGREE_BITS 3
 #define HINT_TRUST_DEGREE_THRESHOLD (1 << (TRUST_DEGREE_BITS - 1))
 #define TRUST_DEGREE_MASK ((1 << TRUST_DEGREE_BITS) - 1)
-#define HINT_OFFSET_MASK (~TRUST_DEGREE_MASK)
+#define HINT_ADDR_MASK (~TRUST_DEGREE_MASK)
 #define TRUST_DEGREE_MAX ((1 << TRUST_DEGREE_BITS) - 1)
 #define TRUST_DEGREE_MIN 0
 
@@ -94,6 +108,7 @@ struct entry_allocator {
 #define VALID_ENTRY_COUNTER_PER_BLOCK \
 	((PAGE_SIZE - sizeof(__le64)) / sizeof(uint16_t))
 
+void light_dedup_init_hint_stream(struct super_block *sb);
 int nova_init_entry_allocator(struct nova_sb_info *sbi, struct entry_allocator *allocator);
 int nova_entry_allocator_recover(struct nova_sb_info *sbi, struct entry_allocator *allocator);
 void nova_free_entry_allocator(struct entry_allocator *allocator);
@@ -125,10 +140,11 @@ static inline void
 nova_alloc_entry_abort(struct entry_allocator_cpu *allocator_cpu)
 {
 }
-void nova_write_entry(struct entry_allocator *allocator,
+void light_dedup_write_entry(struct entry_allocator *allocator,
 	struct entry_allocator_cpu *allocator_cpu,
 	struct nova_pmm_entry *pentry, struct nova_fp fp,
 	unsigned long blocknr);
+void light_dedup_init_entry(struct nova_rht_entry *pentry, struct nova_fp fp, unsigned long blocknr);
 void nova_free_entry(struct entry_allocator *allocator,
 	struct nova_pmm_entry *pentry);
 

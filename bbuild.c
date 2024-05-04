@@ -632,26 +632,27 @@ struct invalidate_unused_fp_entry_para {
 	struct xatable *map_blocknr_pentry;
 	atomic64_t cur_xa;
 };
+
 static void __invalidate_unused_fp_entry_xa(
 	struct nova_sb_info *sbi,
 	struct scan_bitmap *final_bm,
 	struct xatable *map_blocknr_pentry,
 	unsigned long i)
 {
-	struct entry_allocator *allocator =
-		&sbi->light_dedup_meta.entry_allocator;
+	// struct entry_allocator *allocator =
+	// 	&sbi->light_dedup_meta.entry_allocator;
 	unsigned long index, blocknr;
-	struct nova_pmm_entry *pentry;
+	// struct nova_pmm_entry *pentry;
 
-	xa_for_each(map_blocknr_pentry->xa + i, index, pentry) {
-		blocknr = (index << map_blocknr_pentry->num_bit) + i;
-		BUG_ON(blocknr >= sbi->num_blocks);
-		if (test_bit(blocknr, final_bm->bitmap))
-			continue;
-		// Unused. Invalidate the fp_entry.
-		// TODO: Actually no need to use spin_lock_bh inside
-		nova_free_entry(allocator, pentry);
-	}
+	// xa_for_each(map_blocknr_pentry->xa + i, index, pentry) {
+	// 	blocknr = (index << map_blocknr_pentry->num_bit) + i;
+	// 	BUG_ON(blocknr >= sbi->num_blocks);
+	// 	if (test_bit(blocknr, final_bm->bitmap))
+	// 		continue;
+	// 	// Unused. Invalidate the fp_entry.
+	// 	// TODO: Actually no need to use spin_lock_bh inside
+	// 	// nova_free_entry(allocator, pentry);
+	// }
 }
 static void __invalidate_unused_fp_entry_func(
 	struct nova_sb_info *sbi,
@@ -667,6 +668,7 @@ static void __invalidate_unused_fp_entry_func(
 		__invalidate_unused_fp_entry_xa(sbi, final_bm, map_blocknr_pentry, i);
 	}
 }
+
 static int invalidate_unused_fp_entry_func(void *__para)
 {
 	struct invalidate_unused_fp_entry_para *para =
@@ -675,6 +677,7 @@ static int invalidate_unused_fp_entry_func(void *__para)
 		para->final_bm, para->map_blocknr_pentry, &para->cur_xa);
 	return 0;
 }
+
 static int invalidate_unused_fp_entry(
 	struct super_block *sb,
 	struct xatable *map_blocknr_pentry,
@@ -708,6 +711,7 @@ out0:
 	NOVA_END_TIMING(invalidate_unused_fp_entry_t, time);
 	return ret;
 }
+
 static int nova_build_blocknode_map(struct super_block *sb,
 	struct failure_recovery_info *info)
 {
@@ -806,7 +810,7 @@ static int alloc_failure_recovery_info(struct super_block *sb,
 {
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct light_dedup_meta *light_dedup_meta = &sbi->light_dedup_meta;
-	struct entry_allocator *allocator = &light_dedup_meta->entry_allocator;
+	// struct entry_allocator *allocator = &light_dedup_meta->entry_allocator;
 	struct xatable *xat = &info->map_blocknr_pentry;
 	size_t tot;
 	int ret;
@@ -822,17 +826,18 @@ static int alloc_failure_recovery_info(struct super_block *sb,
 		goto err_out1;
 	}
 
-	NOVA_START_TIMING(scan_entry_table_t, scan_fp_entry_table_time);
-	ret = nova_scan_entry_table(sb, allocator, xat,
-		info->global_bm[0].bitmap, &tot);
-	NOVA_END_TIMING(scan_entry_table_t, scan_fp_entry_table_time);
-	if (ret < 0)
-		goto err_out2;
+	// NOVA_START_TIMING(scan_entry_table_t, scan_fp_entry_table_time);
+	// ret = nova_scan_entry_table(sb, allocator, xat,
+	// 	info->global_bm[0].bitmap, &tot);
+	// NOVA_END_TIMING(scan_entry_table_t, scan_fp_entry_table_time);
+	// if (ret < 0)
+	// 	goto err_out2;
 
 	ret = light_dedup_meta_alloc(light_dedup_meta, sb, tot);
 	if (ret < 0)
 		goto err_out3;
 	info->light_dedup_meta = light_dedup_meta;
+	
 	return 0;
 err_out3:
 	light_dedup_meta_free(light_dedup_meta);
@@ -849,41 +854,44 @@ static void free_failure_recovery_info(struct nova_sb_info *sbi, struct failure_
 	xatable_destroy(&info->map_blocknr_pentry);
 	free_bm(sbi, info->global_bm);
 }
+
 static void free_all_failure_recovery_info(struct nova_sb_info *sbi, struct failure_recovery_info *info)
 {
 	struct light_dedup_meta *meta = &sbi->light_dedup_meta;
-	struct entry_allocator *allocator = &meta->entry_allocator;
+	// struct entry_allocator *allocator = &meta->entry_allocator;
 	free_failure_recovery_info(sbi, info);
 	light_dedup_meta_free(meta);
-	nova_free_entry_allocator(allocator);
+	// nova_free_entry_allocator(allocator);
 }
 
 static int upsert_blocknr(unsigned long blocknr, struct failure_recovery_info *info)
 {
-	struct xatable *xat = &info->map_blocknr_pentry;
-	struct light_dedup_meta *meta = info->light_dedup_meta;
-	struct super_block *sb = meta->sblock;
-	struct nova_pmm_entry *pentry;
-	uint64_t refcount;
-	unsigned long irq_flags = 0;
-	int ret;
+	// TODO: Implement this function
+	// struct xatable *xat = &info->map_blocknr_pentry;
+	// struct light_dedup_meta *meta = info->light_dedup_meta;
+	// struct super_block *sb = meta->sblock;
+	// struct nova_pmm_entry *pentry;
+	// uint64_t refcount;
+	// unsigned long irq_flags = 0;
+	// int ret;
 
-	pentry = (struct nova_pmm_entry *)xatable_load(xat, blocknr);
-	if (pentry == NULL)
-		return 0;
-	nova_memunlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
-		&irq_flags);
-	refcount = atomic64_add_return(1, &pentry->refcount);
-	nova_memlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
-		&irq_flags);
-	nova_flush_entry(&meta->entry_allocator, pentry);
-	if (refcount == 1) {
-		ret = light_dedup_insert_rht_entry(meta, pentry->fp, pentry);
-		if (ret < 0)
-			return ret;
-	}
+	// pentry = (struct nova_pmm_entry *)xatable_load(xat, blocknr);
+	// if (pentry == NULL)
+	// 	return 0;
+	// nova_memunlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
+	// 	&irq_flags);
+	// refcount = atomic64_add_return(1, &pentry->refcount);
+	// nova_memlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
+	// 	&irq_flags);
+	// // nova_flush_entry(&meta->entry_allocator, pentry);
+	// if (refcount == 1) {
+	// 	ret = light_dedup_insert_rht_entry(meta, pentry->fp, pentry);
+	// 	if (ret < 0)
+	// 		return ret;
+	// }
 	return 0;
 }
+
 static int
 set_bm(unsigned long blocknr, struct failure_recovery_info *info, int cpuid)
 {

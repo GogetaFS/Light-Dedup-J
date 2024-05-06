@@ -109,6 +109,11 @@ static inline void PERSISTENT_BARRIER(void)
 	asm volatile ("sfence\n" : : );
 }
 
+static inline void MEM_BARRIER(void)
+{
+	asm volatile ("mfence\n" : : );
+}
+
 static inline void nova_flush_buffer(void *buf, size_t len, bool fence)
 {
 	size_t i;

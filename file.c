@@ -729,7 +729,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
 		wp.ubuf += bytes;
 		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, &wp.normal);
+		ret = light_dedup_incr_ref(meta, wp.kbuf, wp.ubuf, &wp.normal);
 		if (ret < 0)
 			goto err_out2;
 		wp.blocknr = wp.normal.blocknr;
@@ -768,7 +768,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
 		wp.ubuf += bytes;
 		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, &wp.normal);
+		ret = light_dedup_incr_ref(meta, wp.kbuf, wp.ubuf, &wp.normal);
 		if (ret < 0)
 			goto err_out2;
 		wp.blocknr = wp.normal.blocknr;

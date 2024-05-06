@@ -982,6 +982,7 @@ static void nova_put_super(struct super_block *sb)
 		/* Save everything before blocknode mapping! */
 		nova_save_blocknode_mappings_to_log(sb);
 		sbi->virt_addr = NULL;
+		kfree(sbi->light_dedup_meta.revmap);
 	}
 
 	nova_delete_free_lists(sb);

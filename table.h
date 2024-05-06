@@ -33,6 +33,7 @@ struct nova_write_para_normal {
 	// Because C does not support inheritance.
 	struct nova_write_para_base base;
 	const void *addr;
+	const void __user *ubuf;
 	unsigned long blocknr;
 	struct nova_rht_entry *pentry;
 	
@@ -85,7 +86,8 @@ struct light_dedup_meta {
 	struct rhashtable rht;
 	struct kmem_cache *rht_entry_cache;
 	// PBN to FP
-	struct rb_root revmap;
+	// struct rb_root revmap;
+	void *revmap;
 	spinlock_t revmap_lock;
 	struct kmem_cache *revmap_entry_cache;
 
@@ -97,7 +99,7 @@ struct kbuf_obj {
 	void *kbuf;
 };
 
-int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr,
+int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr, const void* __user ubuf,
 	struct nova_write_para_normal *wp);
 
 void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,

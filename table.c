@@ -56,7 +56,7 @@
 
 // PBN to FP mapping, for fast deletion
 struct nova_revmap_entry {
-	struct rb_node node;
+	// struct rb_node node;
 	__le64 blocknr;
 	struct nova_fp fp;
 };
@@ -75,45 +75,52 @@ static void nova_revmap_entry_free(struct light_dedup_meta *meta, void *entry)
 static void nova_insert_revmap_entry(struct light_dedup_meta *meta,
 	struct nova_revmap_entry *entry)
 {
-	struct rb_node **new = &meta->revmap.rb_node, *parent = NULL;
-	struct nova_revmap_entry *this;
-	__le64 blocknr = entry->blocknr;
+	// struct rb_node **new = &meta->revmap.rb_node, *parent = NULL;
+	// struct nova_revmap_entry *this;
+	// __le64 blocknr = entry->blocknr;
 
-	while (*new) {
-		this = container_of(*new, struct nova_revmap_entry, node);
-		parent = *new;
-		if (blocknr < this->blocknr)
-			new = &((*new)->rb_left);
-		else
-			new = &((*new)->rb_right);
-	}
-	rb_link_node(&entry->node, parent, new);
-	rb_insert_color(&entry->node, &meta->revmap);
+	// while (*new) {
+	// 	this = container_of(*new, struct nova_revmap_entry, node);
+	// 	parent = *new;
+	// 	if (blocknr < this->blocknr)
+	// 		new = &((*new)->rb_left);
+	// 	else
+	// 		new = &((*new)->rb_right);
+	// }
+	// rb_link_node(&entry->node, parent, new);
+	// rb_insert_color(&entry->node, &meta->revmap);
+	__le64 *revmap = meta->revmap;
+	revmap[le64_to_cpu(entry->blocknr)] = entry;
 }
 
 static void nova_delete_revmap_entry(struct light_dedup_meta *meta,
 	struct nova_revmap_entry *entry)
 {
-	rb_erase(&entry->node, &meta->revmap);
+	// rb_erase(&entry->node, &meta->revmap);
+	// nova_revmap_entry_free(meta, entry);
+	__le64 *revmap = meta->revmap;
+	revmap[le64_to_cpu(entry->blocknr)] = NULL;
 	nova_revmap_entry_free(meta, entry);
 }
 
 static struct nova_revmap_entry *nova_search_revmap_entry(
 	struct light_dedup_meta *meta, unsigned long blocknr)
 {
-	struct rb_node *node = meta->revmap.rb_node;
-	struct nova_revmap_entry *entry;
+	// struct rb_node *node = meta->revmap.rb_node;
+	// struct nova_revmap_entry *entry;
 
-	while (node) {
-		entry = container_of(node, struct nova_revmap_entry, node);
-		if (blocknr < le64_to_cpu(entry->blocknr))
-			node = node->rb_left;
-		else if (blocknr > le64_to_cpu(entry->blocknr))
-			node = node->rb_right;
-		else
-			return entry;
-	}
-	return NULL;
+	// while (node) {
+	// 	entry = container_of(node, struct nova_revmap_entry, node);
+	// 	if (blocknr < le64_to_cpu(entry->blocknr))
+	// 		node = node->rb_left;
+	// 	else if (blocknr > le64_to_cpu(entry->blocknr))
+	// 		node = node->rb_right;
+	// 	else
+	// 		return entry;
+	// }
+	// return NULL;
+	__le64 *revmap = meta->revmap;
+	return revmap[le64_to_cpu(blocknr)];
 }
 
 static u32 nova_rht_entry_key_hashfn(const void *data, u32 len, u32 seed)
@@ -262,7 +269,7 @@ static int alloc_and_fill_block(
 	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
-	memcpy_flushcache((char *)xmem, (const char *)wp->addr, 4096);
+	memcpy_to_pmem_nocache(xmem, wp->ubuf, 4096);
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
 	return 0;
@@ -307,8 +314,10 @@ static int handle_new_block(
 	int cpu;
 	int64_t refcount;
 	int ret;
+	INIT_TIMING(time);
 	INIT_TIMING(index_insert_new_entry_time);
 
+	NOVA_START_TIMING(handle_new_blk_t, time);
 	pentry = rht_entry_alloc(meta);
 	if (pentry == NULL) {
 		ret = -ENOMEM;
@@ -356,6 +365,8 @@ static int handle_new_block(
 	wp->last_accessed = pentry;
 	// printk("Block %lu with fp %llx inserted into rhashtable %p, "
 	// 	"fpentry offset = %p\n", wp->blocknr, fp.value, rht, pentry);
+
+	NOVA_END_TIMING(handle_new_blk_t, time);
 	return 0;
 
 fail2:
@@ -363,6 +374,7 @@ fail2:
 fail1:
 	nova_rht_entry_free(pentry, meta->rht_entry_cache);
 fail0:
+	NOVA_END_TIMING(handle_new_blk_t, time);
 	return ret;
 }
 
@@ -465,7 +477,7 @@ static int incr_ref_normal(struct light_dedup_meta *meta,
 }
 
 static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta,
-	const void *addr, struct nova_write_para_normal *wp)
+	const void *addr, const void * __user ubuf, struct nova_write_para_normal *wp)
 {
 	int ret;
 	INIT_TIMING(incr_ref_time);
@@ -473,17 +485,18 @@ static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta,
 	NOVA_START_TIMING(incr_ref_t, incr_ref_time);
 	BUG_ON(nova_fp_calc(&meta->fp_ctx, addr, &wp->base.fp));
 	wp->addr = addr;
+	wp->ubuf = ubuf;
 	ret = incr_ref_normal(meta, wp);
 	NOVA_END_TIMING(incr_ref_t, incr_ref_time);
 	return ret;
 }
 
-int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr,
+int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr, const void* __user ubuf,
 	struct nova_write_para_normal *wp)
 {
 	int ret;
 	while (1) {
-		ret = light_dedup_incr_ref_atomic(meta, addr, wp);
+		ret = light_dedup_incr_ref_atomic(meta, addr, ubuf, wp);
 		if (likely(ret != -EAGAIN))
 			break;
 		schedule();
@@ -832,7 +845,7 @@ static int copy_from_user_incr_ref(struct nova_sb_info *sbi,
 	NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
 	if (ret)
 		return -EFAULT;
-	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, wp->kbuf,
+	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, wp->kbuf, wp->ubuf,
 		&wp->normal);
 	if (ret < 0)
 		return ret;
@@ -1397,10 +1410,15 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 	}
 
 	spin_lock_init(&meta->revmap_lock);
-	meta->revmap = RB_ROOT;
-	meta->revmap_entry_cache = kmem_cache_create("revmap_entry_cache",
-		sizeof(struct nova_revmap_entry), 0, TABLE_KMEM_CACHE_FLAGS, NULL);
-	if (meta->revmap_entry_cache == NULL) {
+	// meta->revmap = RB_ROOT;
+	// meta->revmap_entry_cache = kmem_cache_create("revmap_entry_cache",
+	// 	sizeof(struct nova_revmap_entry), 0, TABLE_KMEM_CACHE_FLAGS, NULL);
+	// if (meta->revmap_entry_cache == NULL) {
+	// 	ret = -ENOMEM;
+	// 	goto err_out3;
+	// }
+	meta->revmap = kzalloc(sbi->num_blocks * sizeof(struct nova_fp), GFP_KERNEL);
+	if (meta->revmap == NULL) {
 		ret = -ENOMEM;
 		goto err_out3;
 	}

@@ -1378,13 +1378,13 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 
 	spin_lock_init(&meta->revmap_lock);
 	// meta->revmap = RB_ROOT;
-	// meta->revmap_entry_cache = kmem_cache_create("revmap_entry_cache",
-	// 	sizeof(struct nova_revmap_entry), 0, TABLE_KMEM_CACHE_FLAGS, NULL);
-	// if (meta->revmap_entry_cache == NULL) {
-	// 	ret = -ENOMEM;
-	// 	goto err_out3;
-	// }
 	xa_init(&meta->revmap);
+	meta->revmap_entry_cache = kmem_cache_create("revmap_entry_cache",
+		sizeof(struct nova_revmap_entry), 0, TABLE_KMEM_CACHE_FLAGS, NULL);
+	if (meta->revmap_entry_cache == NULL) {
+		ret = -ENOMEM;
+		goto err_out3;
+	}
 
 	atomic64_set(&meta->thread_num, 0);
 	NOVA_END_TIMING(meta_alloc_t, table_init_time);

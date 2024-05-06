@@ -701,14 +701,8 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 
 	cpu = get_cpu();
 	wp.normal.last_accessed = per_cpu(last_accessed_fpentry_per_cpu, cpu);
-	
-	// wp.normal.last_new_entries[0] = per_cpu(last_new_fpentry_per_cpu, cpu);
-	// wp.normal.last_new_entries[1] = NULL_PENTRY;
-
 	wp.stream_trust_degree = per_cpu(stream_trust_degree_per_cpu, cpu);
 	put_cpu();
-	// wp.normal.last_ref_entries[0] = NULL_PENTRY;
-	// wp.normal.last_ref_entries[1] = NULL_PENTRY;
 	wp.prefetched_blocknr[0] = wp.prefetched_blocknr[1] = 0;
 	
 	if (offset != 0) {

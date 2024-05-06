@@ -64,7 +64,7 @@ struct nova_revmap_entry {
 static inline struct nova_revmap_entry* revmap_entry_alloc(
 	struct light_dedup_meta *meta)
 {
-	return kmem_cache_zalloc(meta->revmap_entry_cache, GFP_ATOMIC);
+	return kmem_cache_alloc(meta->revmap_entry_cache, GFP_ATOMIC);
 }
 
 static void nova_revmap_entry_free(struct light_dedup_meta *meta, void *entry)
@@ -236,6 +236,7 @@ static int alloc_and_fill_block(
 	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
+	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
 	memcpy_to_pmem_nocache(xmem, wp->ubuf, 4096);
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
@@ -320,18 +321,10 @@ static int handle_new_block(
 			"with error code %d\n", wp->blocknr, fp.value, ret);
 		goto fail1;
 	}
-	
-	// printk("Block %lu inserted into rhashtable\n", wp->blocknr);
-	// nova_memunlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
-	// 	&irq_flags);
+
 	refcount = atomic64_cmpxchg(&pentry->refcount, 0, 1);
-	// nova_memlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
-	// 	&irq_flags);
 	BUG_ON(refcount != 0);
-	// new_dirty_fpentry(wp->last_new_entries, pentry);
 	wp->last_accessed = pentry;
-	// printk("Block %lu with fp %llx inserted into rhashtable %p, "
-	// 	"fpentry offset = %p\n", wp->blocknr, fp.value, rht, pentry);
 
 	NOVA_END_TIMING(handle_new_blk_t, time);
 	return 0;

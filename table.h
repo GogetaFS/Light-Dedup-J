@@ -87,7 +87,7 @@ struct light_dedup_meta {
 	struct kmem_cache *rht_entry_cache;
 	// PBN to FP
 	// struct rb_root revmap;
-	void *revmap;
+	struct xarray revmap;
 	spinlock_t revmap_lock;
 	struct kmem_cache *revmap_entry_cache;
 

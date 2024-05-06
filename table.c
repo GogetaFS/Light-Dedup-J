@@ -75,52 +75,19 @@ static void nova_revmap_entry_free(struct light_dedup_meta *meta, void *entry)
 static void nova_insert_revmap_entry(struct light_dedup_meta *meta,
 	struct nova_revmap_entry *entry)
 {
-	// struct rb_node **new = &meta->revmap.rb_node, *parent = NULL;
-	// struct nova_revmap_entry *this;
-	// __le64 blocknr = entry->blocknr;
-
-	// while (*new) {
-	// 	this = container_of(*new, struct nova_revmap_entry, node);
-	// 	parent = *new;
-	// 	if (blocknr < this->blocknr)
-	// 		new = &((*new)->rb_left);
-	// 	else
-	// 		new = &((*new)->rb_right);
-	// }
-	// rb_link_node(&entry->node, parent, new);
-	// rb_insert_color(&entry->node, &meta->revmap);
-	__le64 *revmap = meta->revmap;
-	revmap[le64_to_cpu(entry->blocknr)] = entry;
+	xa_store(&meta->revmap, entry->blocknr, entry, GFP_ATOMIC);
 }
 
 static void nova_delete_revmap_entry(struct light_dedup_meta *meta,
 	struct nova_revmap_entry *entry)
 {
-	// rb_erase(&entry->node, &meta->revmap);
-	// nova_revmap_entry_free(meta, entry);
-	__le64 *revmap = meta->revmap;
-	revmap[le64_to_cpu(entry->blocknr)] = NULL;
-	nova_revmap_entry_free(meta, entry);
+	xa_erase(&meta->revmap, entry->blocknr);
 }
 
 static struct nova_revmap_entry *nova_search_revmap_entry(
 	struct light_dedup_meta *meta, unsigned long blocknr)
 {
-	// struct rb_node *node = meta->revmap.rb_node;
-	// struct nova_revmap_entry *entry;
-
-	// while (node) {
-	// 	entry = container_of(node, struct nova_revmap_entry, node);
-	// 	if (blocknr < le64_to_cpu(entry->blocknr))
-	// 		node = node->rb_left;
-	// 	else if (blocknr > le64_to_cpu(entry->blocknr))
-	// 		node = node->rb_right;
-	// 	else
-	// 		return entry;
-	// }
-	// return NULL;
-	__le64 *revmap = meta->revmap;
-	return revmap[le64_to_cpu(blocknr)];
+	return xa_load(&meta->revmap, blocknr);
 }
 
 static u32 nova_rht_entry_key_hashfn(const void *data, u32 len, u32 seed)
@@ -1417,11 +1384,7 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 	// 	ret = -ENOMEM;
 	// 	goto err_out3;
 	// }
-	meta->revmap = kzalloc(sbi->num_blocks * sizeof(struct nova_fp), GFP_KERNEL);
-	if (meta->revmap == NULL) {
-		ret = -ENOMEM;
-		goto err_out3;
-	}
+	xa_init(&meta->revmap);
 
 	atomic64_set(&meta->thread_num, 0);
 	NOVA_END_TIMING(meta_alloc_t, table_init_time);

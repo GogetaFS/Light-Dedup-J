@@ -64,7 +64,7 @@ struct nova_revmap_entry {
 static inline struct nova_revmap_entry* revmap_entry_alloc(
 	struct light_dedup_meta *meta)
 {
-	return kmem_cache_alloc(meta->revmap_entry_cache, GFP_ATOMIC);
+	return kmem_cache_zalloc(meta->revmap_entry_cache, GFP_ATOMIC);
 }
 
 static void nova_revmap_entry_free(struct light_dedup_meta *meta, void *entry)
@@ -150,7 +150,7 @@ const struct rhashtable_params nova_rht_params = {
 static inline struct nova_rht_entry* rht_entry_alloc(
 	struct light_dedup_meta *meta)
 {
-	struct nova_rht_entry* entry = kmem_cache_alloc(meta->rht_entry_cache, GFP_ATOMIC);
+	struct nova_rht_entry* entry = kmem_cache_zalloc(meta->rht_entry_cache, GFP_ATOMIC);
 	// ensure that we can use the lowest 3 bits of next_hint
 	BUG_ON(((u64)entry & TRUST_DEGREE_MASK) != 0);
 	return entry;

@@ -12,48 +12,63 @@
 
 #include <linux/slab.h>
 
+#define hlist_for_each_possible(name, pos, key) \
+	hlist_for_each(pos, &name[hash_min(key, HASH_BITS(name))])
+
+#define hash_for_each_safe(name, bkt, tmp, pos)			\
+	for ((bkt) = 0, pos = NULL; pos == NULL && (bkt) < HASH_SIZE(name);\
+			(bkt)++)\
+		hlist_for_each_safe(pos, tmp, &name[bkt])
+
 void generic_cache_init(struct generic_cache *cache,
-	struct llist_node *(*allocate)(gfp_t),
-	void (*free)(struct llist_node *))
+	struct hlist_node *(*allocate)(size_t, gfp_t),
+	void (*free)(struct hlist_node *))
 {
 	spin_lock_init(&cache->lock);
-	init_llist_head(&cache->head);
 	cache->allocate = allocate;
 	cache->free = free;
 	cache->allocated = 0;
 }
 
-struct llist_node *generic_cache_alloc(struct generic_cache *cache, gfp_t flags)
+struct hlist_node *generic_cache_alloc(struct generic_cache *cache, size_t size, gfp_t flags)
 {
-	struct llist_node *ret;
+	struct hlist_node *ret = NULL;
 	spin_lock(&cache->lock);
-	if (cache->head.first == NULL) {
+
+	hlist_for_each_possible(cache->ctbl, ret, size) {
+		if (ret) {
+			hlist_del(ret);
+			break;
+		}
+	}
+	
+	if (!ret) {
 		cache->allocated += 1;
 		spin_unlock(&cache->lock);
-		return cache->allocate(flags);
+		return cache->allocate(size, flags);
 	}
-	ret = cache->head.first;
-	cache->head.first = ret->next;
+
 	spin_unlock(&cache->lock);
 	return ret;
 }
 
-void generic_cache_free(struct generic_cache *cache, struct llist_node *node)
+void generic_cache_free(struct generic_cache *cache, size_t size, struct hlist_node *node)
 {
 	spin_lock(&cache->lock);
-	node->next = cache->head.first;
-	cache->head.first = node;
+	hash_add(cache->ctbl, node, size);
 	spin_unlock(&cache->lock);
 }
 
 // Make sure that there is no other threads accessing it
 void generic_cache_destroy(struct generic_cache *cache)
 {
-	struct llist_node *cur = cache->head.first, *next;
+	size_t bkt;
+	struct hlist_node *pos, *tmp;
+	
 	printk("Generic cache allocated %lu\n", cache->allocated);
-	while (cur != NULL) {
-		next = cur->next;
-		cache->free(cur);
-		cur = next;
+	
+	hash_for_each_safe(cache->ctbl, bkt, tmp, pos) {
+		hash_del(pos);
+		cache->free(pos);
 	}
 }

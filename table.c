@@ -1335,12 +1335,12 @@ struct rht_save_factory_arg {
 // 	return ret;
 // }
 
-static struct llist_node *allocate_kbuf(gfp_t flags)
+static struct hlist_node *allocate_kbuf(size_t size, gfp_t flags)
 {
 	struct kbuf_obj *obj = kmalloc(sizeof(struct kbuf_obj), flags);
 	if (obj == NULL)
 		return NULL;
-	obj->kbuf = kmalloc(PAGE_SIZE, flags);
+	obj->kbuf = kmalloc(size, flags);
 	if (obj->kbuf == NULL) {
 		kfree(obj);
 		return NULL;
@@ -1348,7 +1348,7 @@ static struct llist_node *allocate_kbuf(gfp_t flags)
 	return &obj->node;
 }
 
-static void free_kbuf(struct llist_node *node)
+static void free_kbuf(struct hlist_node *node)
 {
 	struct kbuf_obj *obj = container_of(node, struct kbuf_obj, node);
 	kfree(obj->kbuf);

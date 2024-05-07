@@ -119,7 +119,7 @@ struct light_dedup_meta {
 };
 
 struct kbuf_obj {
-	struct llist_node node;
+	struct hlist_node node;
 	void *kbuf;
 };
 

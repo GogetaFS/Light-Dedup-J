@@ -617,7 +617,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	struct nova_inode inode_copy;
 	size_t offset, bytes;
 	unsigned long num_blocks;
-	struct llist_node *kbuf_node;
+	struct hlist_node *kbuf_node;
 	struct kbuf_obj *kbuf_obj;
 	struct nova_write_para_continuous wp;
 	int cpu;
@@ -689,7 +689,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	wp.blocknr = 0;
 	wp.num = 0;
 	wp.blocknr_next = 0;
-	kbuf_node = generic_cache_alloc(&meta->kbuf_cache, GFP_KERNEL);
+	kbuf_node = generic_cache_alloc(&meta->kbuf_cache, num_blocks << 12, GFP_KERNEL);
 	if (kbuf_node == NULL) {
 		ret = -ENOMEM;
 		goto err_out1;
@@ -829,7 +829,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 
 	env.sih->trans_id++;
 	NOVA_STATS_ADD(cow_write_bytes, env.written);
-	generic_cache_free(&meta->kbuf_cache, kbuf_node);
+	generic_cache_free(&meta->kbuf_cache, num_blocks << 12, kbuf_node);
 	atomic64_fetch_sub_relaxed(1, &meta->thread_num);
 	return env.written;
 
@@ -840,7 +840,7 @@ err_out2:
 	}
 	BUG_ON(nova_cleanup_incomplete_write(env.sb, env.sih,
 		wp.blocknr, wp.num, env.begin_tail, env.update.tail) < 0);
-	generic_cache_free(&meta->kbuf_cache, kbuf_node);
+	generic_cache_free(&meta->kbuf_cache, num_blocks << 12, kbuf_node);
 err_out1:
 	atomic64_fetch_sub_relaxed(1, &meta->thread_num);
 err_out0:

@@ -937,11 +937,11 @@ static inline void prefetch_next_stage_2(struct nova_write_para_continuous *wp)
 
 // Return whether the block is deduplicated successfully.
 static int check_hint(struct nova_sb_info *sbi,
-	struct nova_write_para_continuous *wp, struct nova_rht_entry *pentry)
+	struct nova_write_para_continuous *wp, struct nova_rht_entry *speculative_pentry)
 {
 	struct light_dedup_meta *meta = &sbi->light_dedup_meta;
-	unsigned long blocknr;
-	const char *addr;
+	unsigned long speculative_blocknr;
+	const char *speculative_addr;
 	size_t i;
 	int64_t ret;
 	// unsigned long irq_flags = 0;
@@ -953,29 +953,29 @@ static int check_hint(struct nova_sb_info *sbi,
 	// are reading its content.
 	rcu_read_lock();
 
-	if (atomic64_read(&pentry->refcount) == 0) {
+	if (atomic64_read(&speculative_pentry->refcount) == 0) {
 		rcu_read_unlock();
 		nova_warn("Refcount is 0\n");
 		return 0;
 	}
 
-	blocknr = pentry->blocknr;
-	BUG_ON(blocknr == 0);
+	speculative_blocknr = speculative_pentry->blocknr;
+	BUG_ON(speculative_blocknr == 0);
 	// It is guaranteed that the block will not be freed,
 	// because we are holding the RCU read lock.
-	addr = nova_sbi_blocknr_to_addr(sbi, blocknr);
+	speculative_addr = nova_sbi_blocknr_to_addr(sbi, speculative_blocknr);
 
 	if (atomic64_read(&meta->thread_num) < transition_threshold) {
-		handle_hint_of_hint(sbi, wp, &pentry->next_hint);
+		handle_hint_of_hint(sbi, wp, &speculative_pentry->next_hint);
 		NOVA_START_TIMING(prefetch_cmp_t, prefetch_cmp_time);
 		// Prefetch with stride 256B first in case that this block have
 		// not been prefetched yet.
 		for (i = 0; i < PAGE_SIZE; i += 256)
-			prefetcht0(addr + i);
+			prefetcht0(speculative_addr + i);
 		for (i = 0; i < PAGE_SIZE; i += 256) {
-			prefetcht0(addr + i + 64);
-			prefetcht0(addr + i + 64 * 2);
-			prefetcht0(addr + i + 64 * 3);
+			prefetcht0(speculative_addr + i + 64);
+			prefetcht0(speculative_addr + i + 64 * 2);
+			prefetcht0(speculative_addr + i + 64 * 3);
 		}
 		NOVA_END_TIMING(prefetch_cmp_t, prefetch_cmp_time);
 	} else {
@@ -983,7 +983,7 @@ static int check_hint(struct nova_sb_info *sbi,
 		// reading/writing NVM
 		NOVA_START_TIMING(prefetch_cmp_t, prefetch_cmp_time);
 		for (i = 0; i < PAGE_SIZE; i += 64)
-			prefetcht0(addr + i);
+			prefetcht0(speculative_addr + i);
 		NOVA_END_TIMING(prefetch_cmp_t, prefetch_cmp_time);
 	}
 
@@ -991,7 +991,7 @@ static int check_hint(struct nova_sb_info *sbi,
 	NOVA_START_TIMING(hit_incr_ref_t, hit_incr_ref_time);
 	// nova_memunlock_range(sbi->sb, &pentry->refcount,
 	// 	sizeof(pentry->refcount), &irq_flags);
-	ret = atomic64_add_unless(&pentry->refcount, 1, 0);
+	ret = atomic64_add_unless(&speculative_pentry->refcount, 1, 0);
 	// nova_memlock_range(sbi->sb, &pentry->refcount,
 	// 	sizeof(pentry->refcount), &irq_flags);
 	NOVA_END_TIMING(hit_incr_ref_t, hit_incr_ref_time);
@@ -1007,37 +1007,32 @@ static int check_hint(struct nova_sb_info *sbi,
 	prefetch_next_stage_1(wp);
 
 	NOVA_START_TIMING(cmp_user_t, cmp_user_time);
-	ret = cmp_user_generic_const_8B_aligned(wp->ubuf, addr, PAGE_SIZE);
+	ret = cmp_user_generic_const_8B_aligned(wp->ubuf, speculative_addr, PAGE_SIZE);
 	NOVA_END_TIMING(cmp_user_t, cmp_user_time);
 
 	// prefetch the pentry.next_hint
 	prefetch_next_stage_2(wp);
 
 	if (ret < 0) {
-		decr_ref(meta, pentry);
+		decr_ref(meta, speculative_pentry);
 		return -EFAULT;
 	}
 
 	if (ret != 0) {
-		// printk("Prediction miss: %lld\n", ret);
-		// BUG_ON(copy_from_user(wp->kbuf, wp->ubuf, PAGE_SIZE));
-		// print(wp->kbuf);
-		// printk("\n");
-		// print(addr);
-		decr_ref(meta, pentry);
+		decr_ref(meta, speculative_pentry);
 		return 0;
 	}
 
-	if (blocknr == wp->prefetched_blocknr[1] ||
-			blocknr == wp->prefetched_blocknr[0]) {
+	if (speculative_blocknr == wp->prefetched_blocknr[1] ||
+			speculative_blocknr == wp->prefetched_blocknr[0]) {
 		// The hit counts of prefetching is slightly underestimated
 		// because there is also probability that the current hint
 		// misses but the prefetched block hits.
 		NOVA_STATS_ADD(prefetch_hit, 1);
 	}
-	attach_blocknr(wp, blocknr);
+	attach_blocknr(wp, speculative_blocknr);
 	// new_dirty_fpentry(wp->normal.last_ref_entries, pentry);
-	wp->normal.last_accessed = pentry;
+	wp->normal.last_accessed = speculative_pentry;
 	// printk("Prediction hit! blocknr = %ld, pentry = %p\n", blocknr, pentry);
 	return 1;
 }
@@ -1048,7 +1043,7 @@ static int handle_hint(struct nova_sb_info *sbi,
 	uint64_t hint = le64_to_cpu(atomic64_read(next_hint));
 	u64 addr = hint & HINT_ADDR_MASK;
 	uint8_t trust_degree = hint & TRUST_DEGREE_MASK;
-	struct nova_rht_entry *pentry = (struct nova_rht_entry *)addr;
+	struct nova_rht_entry *speculative_pentry = (struct nova_rht_entry *)addr;
 	int ret;
 
 	if (addr == 0) {
@@ -1061,7 +1056,7 @@ static int handle_hint(struct nova_sb_info *sbi,
 								addr, trust_degree);
 	}
 
-	ret = check_hint(sbi, wp, pentry);
+	ret = check_hint(sbi, wp, speculative_pentry);
 
 	if (ret < 0)
 		return ret;

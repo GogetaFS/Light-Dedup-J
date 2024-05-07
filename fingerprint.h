@@ -32,11 +32,11 @@ static inline int nova_fp_strong_ctx_init(struct nova_fp_strong_ctx *ctx) {
 static inline void nova_fp_strong_ctx_free(struct nova_fp_strong_ctx *ctx) {
 }
 
-static inline int nova_fp_calc(struct nova_fp_strong_ctx *fp_ctx, const void *addr, struct nova_fp *fp)
+static inline int nova_fp_calc(struct nova_fp_strong_ctx *fp_ctx, const void *addr, size_t length, struct nova_fp *fp)
 {
 	INIT_TIMING(fp_calc_time);
 	NOVA_START_TIMING(fp_calc_t, fp_calc_time);
-	fp->value = xxh64((const char *)addr, 4096, 0);
+	fp->value = xxh64((const char *)addr, length, 0);
 	NOVA_END_TIMING(fp_calc_t, fp_calc_time);
 	return 0;
 }

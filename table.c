@@ -243,6 +243,27 @@ static int alloc_and_fill_block(
 	return 0;
 }
 
+static int light_dedup_fill_blocks(
+	struct super_block *sb,
+	struct nova_write_para_continuous *wp)
+{
+	void *xmem;
+	// unsigned long irq_flags = 0;
+	INIT_TIMING(memcpy_time);
+
+	if (wp->blocknr == 0)
+		return -ENOSPC;
+	// printk("%s: Block %ld allocated", __func__, wp->blocknr);
+	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
+	// nova_memunlock_block(sb, xmem, &irq_flags);
+	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
+	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
+	memcpy_to_pmem_nocache(xmem, wp->ubuf, wp->num * 4096);
+	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
+	// nova_memlock_block(sb, xmem, &irq_flags);
+	return NO_DEDUP;
+}
+
 #if 0
 static int rewrite_block(
 	struct super_block *sb,
@@ -272,8 +293,8 @@ static void assign_entry(
 
 static int handle_new_block(
 	struct light_dedup_meta *meta,
-	struct nova_write_para_normal *wp,
-	int get_new_block(struct super_block *, struct nova_write_para_normal *))
+	struct nova_write_para_continuous *wp,
+	int fill_blocks(struct super_block *, struct nova_write_para_continuous *))
 {
 	struct super_block *sb = meta->sblock;
 	struct nova_rht_entry *pentry;
@@ -298,13 +319,14 @@ static int handle_new_block(
 		goto fail1;
 	}
 
-	ret = get_new_block(sb, wp);
+	ret = fill_blocks(sb, wp);
 	if (ret < 0) {
 		goto fail2;
 	}
 
 	light_dedup_init_entry(pentry, fp, wp->blocknr);
 
+	// NOTE: the first chunk of the super chunk
 	rev_entry->blocknr = wp->blocknr;
 	rev_entry->fp = fp;
 	spin_lock(&meta->revmap_lock);
@@ -339,21 +361,29 @@ fail0:
 }
 
 // True: Not equal. False: Equal
-static bool cmp_content(struct super_block *sb, unsigned long blocknr, const void *addr) {
+static bool cmp_content(struct super_block *sb, unsigned long blocknr, const void *addr, size_t size) {
 	INIT_TIMING(memcmp_time);
 	const char *content;
 	size_t i;
 	bool res;
 	NOVA_START_TIMING(memcmp_t, memcmp_time);
 	content = nova_blocknr_to_addr(sb, blocknr);
-	for (i = 0; i < 16; ++i)
-		prefetcht0(content + i * 256);
-	for (i = 0; i < 16; ++i) {
-		prefetcht0(content + i * 256 + 64);
-		prefetcht0(content + i * 256 + 64 * 2);
-		prefetcht0(content + i * 256 + 64 * 3);
+	// support super chunk
+	for (i = 0; i < size; i += 4096) {
+		for (i = 0; i < 16; ++i)
+			prefetcht0(content + i * 256);
+		for (i = 0; i < 16; ++i) {
+			prefetcht0(content + i * 256 + 64);
+			prefetcht0(content + i * 256 + 64 * 2);
+			prefetcht0(content + i * 256 + 64 * 3);
+		}
+		res = cmp64((const uint64_t *)content, addr);
+		if (res) {
+			break;
+		}
+		addr += 4096;
+		content += 4096;
 	}
-	res = cmp64((const uint64_t *)content, addr);
 	NOVA_END_TIMING(memcmp_t, memcmp_time);
 	if (res) {
 		print(content);
@@ -364,9 +394,9 @@ static bool cmp_content(struct super_block *sb, unsigned long blocknr, const voi
 }
 
 static int incr_ref(struct light_dedup_meta *meta,
-	struct nova_write_para_normal *wp,
-	int (*get_new_block)(struct super_block *,
-		struct nova_write_para_normal *))
+	struct nova_write_para_continuous *wp,
+	int (*fill_blocks)(struct super_block *,
+		struct nova_write_para_continuous *))
 {
 	struct super_block *sb = meta->sblock;
 	struct rhashtable *rht = &meta->rht;
@@ -387,9 +417,11 @@ retry:
 		rcu_read_unlock();
 		// printk("Block with fp %llx not found in rhashtable %p\n",
 		// 	wp->base.fp.value, rht);
-		ret = handle_new_block(meta, wp, get_new_block);
+		ret = handle_new_block(meta, wp, fill_blocks);
 		if (ret == -EEXIST)
 			goto retry;
+		else
+			ret = NO_DEDUP;
 		wp->base.refcount = 1;
 		return ret;
 	}
@@ -397,13 +429,13 @@ retry:
 	blocknr = pentry->blocknr;
 
 	BUG_ON(blocknr == 0);
-	if (cmp_content(sb, blocknr, wp->addr)) {
+	if (cmp_content(sb, blocknr, wp->kbuf, wp->num << 12)) {
 		rcu_read_unlock();
 		wp->last_accessed = NULL;
 		nova_dbg("fp:%llx rentry.fp:%llx",wp->base.fp.value, pentry->fp.value);
 		printk("Collision, just write it.");
 		wp->base.refcount = 0;
-		return get_new_block(sb, wp);
+		return fill_blocks(sb, wp);
 		// const void *content = nova_get_block(sb, nova_sb_blocknr_to_addr(sb, le64_to_cpu(leaf->blocknr), NOVA_BLOCK_TYPE_4K));
 		// printk("First 8 bytes of existed_entry: %llx, chunk_id = %llx, fingerprint = %llx %llx %llx %llx\nFirst 8 bytes of incoming block: %llx, fingerprint = %llx %llx %llx %llx\n",
 		// 	*(uint64_t *)content, leaf->blocknr, leaf->fp_strong.u64s[0], leaf->fp_strong.u64s[1], leaf->fp_strong.u64s[2], leaf->fp_strong.u64s[3],
@@ -427,36 +459,34 @@ retry:
 	wp->last_accessed = pentry;
 	// printk("Block %lu (fpentry %p) has refcount %lld now\n",
 	// 	wp->blocknr, pentry, wp->base.refcount);
-	return 0;
+	return DEDUP_SUCCESS;
 }
 
 static int incr_ref_normal(struct light_dedup_meta *meta,
-	struct nova_write_para_normal *wp)
+	struct nova_write_para_continuous *wp)
 {
-	return incr_ref(meta, wp, alloc_and_fill_block);
+	return incr_ref(meta, wp, light_dedup_fill_blocks);
 }
 
-static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta,
-	const void *addr, const void * __user ubuf, struct nova_write_para_normal *wp)
+static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta, struct nova_write_para_continuous *wp)
 {
 	int ret;
+	void *addr = wp->kbuf;
 	INIT_TIMING(incr_ref_time);
 
 	NOVA_START_TIMING(incr_ref_t, incr_ref_time);
-	BUG_ON(nova_fp_calc(&meta->fp_ctx, addr, &wp->base.fp));
-	wp->addr = addr;
-	wp->ubuf = ubuf;
+	BUG_ON(nova_fp_calc(&meta->fp_ctx, addr, wp->num << 12, &wp->base.fp));
 	ret = incr_ref_normal(meta, wp);
 	NOVA_END_TIMING(incr_ref_t, incr_ref_time);
 	return ret;
 }
 
-int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr, const void* __user ubuf,
-	struct nova_write_para_normal *wp)
+int light_dedup_incr_ref(struct light_dedup_meta *meta, struct nova_write_para_continuous *wp)
 {
 	int ret;
+
 	while (1) {
-		ret = light_dedup_incr_ref_atomic(meta, addr, ubuf, wp);
+		ret = light_dedup_incr_ref_atomic(meta, wp);
 		if (likely(ret != -EAGAIN))
 			break;
 		schedule();
@@ -503,8 +533,7 @@ static int64_t decr_ref(struct light_dedup_meta *meta,
 	return refcount;
 }
 
-void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
-	struct nova_rht_entry **last_pentry)
+void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr)
 {
 	struct super_block *sb = meta->sblock;
 	struct rhashtable *rht = &meta->rht;
@@ -541,10 +570,6 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 	// The entry won't be freed by others
 	// because we are referencing it.
 	rcu_read_unlock();
-	
-	if (refcount != 0) {
-		*last_pentry = pentry;
-	}
 }
 
 // refcount-- only if refcount == 1
@@ -601,23 +626,23 @@ static int decr_ref_1(
 	return 0;
 }
 
-long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
-	unsigned long blocknr)
-{
-	struct nova_write_para_normal wp;
-	int    retval;
-	INIT_TIMING(decr_ref_time);
+// long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
+// 	unsigned long blocknr)
+// {
+// 	struct nova_write_para_normal wp;
+// 	int    retval;
+// 	INIT_TIMING(decr_ref_time);
 
-	BUG_ON(blocknr == 0);
-	BUG_ON(nova_fp_calc(&meta->fp_ctx, addr, &wp.base.fp));
+// 	BUG_ON(blocknr == 0);
+// 	BUG_ON(nova_fp_calc(&meta->fp_ctx, addr, &wp.base.fp));
 
-	wp.addr = addr;
-	wp.blocknr = blocknr;
-	NOVA_START_TIMING(decr_ref_t, decr_ref_time);
-	retval = decr_ref_1(meta, &wp);
-	NOVA_END_TIMING(decr_ref_t, decr_ref_time);
-	return retval < 0 ? retval : wp.base.refcount;
-}
+// 	wp.addr = addr;
+// 	wp.blocknr = blocknr;
+// 	NOVA_START_TIMING(decr_ref_t, decr_ref_time);
+// 	retval = decr_ref_1(meta, &wp);
+// 	NOVA_END_TIMING(decr_ref_t, decr_ref_time);
+// 	return retval < 0 ? retval : wp.base.refcount;
+// }
 
 int light_dedup_insert_rht_entry(struct light_dedup_meta *meta,
 	struct nova_fp fp, struct nova_pmm_entry *pentry)
@@ -800,15 +825,17 @@ static int copy_from_user_incr_ref(struct nova_sb_info *sbi,
 	INIT_TIMING(copy_from_user_time);
 
 	NOVA_START_TIMING(copy_from_user_t, copy_from_user_time);
-	ret = copy_from_user(wp->kbuf, wp->ubuf, PAGE_SIZE);
+	ret = copy_from_user(wp->kbuf, wp->ubuf, (wp->num << 12));
 	NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
 	if (ret)
 		return -EFAULT;
-	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, wp->kbuf, wp->ubuf,
-		&wp->normal);
+	
+	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, wp);
 	if (ret < 0)
 		return ret;
-	attach_blocknr(wp, wp->normal.blocknr);
+	
+	// attach_blocknr(wp, wp->normal.blocknr);
+
 	return 0;
 }
 
@@ -827,10 +854,10 @@ static int handle_no_hint(struct nova_sb_info *sbi,
 	if (ret < 0)
 		return ret;
 	NOVA_STATS_ADD(no_hint, 1);
-	if (unlikely(wp->normal.last_accessed == NULL))
+	if (unlikely(wp->last_accessed == NULL))
 		return 0;
 
-	addr = wp->normal.last_accessed;
+	addr = wp->last_accessed;
 
 	NOVA_START_TIMING(update_hint_t, update_hint_time);
 	// nova_sbi_memunlock_range(sbi, next_hint, sizeof(*next_hint),
@@ -858,9 +885,9 @@ static int handle_not_trust(struct nova_sb_info *sbi,
 	ret = copy_from_user_incr_ref(sbi, wp);
 	if (ret < 0)
 		return ret;
-	if (unlikely(wp->normal.last_accessed == NULL))
+	if (unlikely(wp->last_accessed == NULL))
 		return 0;
-	addr_new = wp->normal.last_accessed;
+	addr_new = wp->last_accessed;
 	if (addr_new == addr) {
 		NOVA_STATS_ADD(hint_not_trusted_hit, 1);
 		incr_trust_degree(sbi, next_hint, addr, trust_degree);
@@ -1029,9 +1056,9 @@ static int check_hint(struct nova_sb_info *sbi,
 		// misses but the prefetched block hits.
 		NOVA_STATS_ADD(prefetch_hit, 1);
 	}
-	attach_blocknr(wp, speculative_blocknr);
+	// attach_blocknr(wp, speculative_blocknr);
 	// new_dirty_fpentry(wp->normal.last_ref_entries, pentry);
-	wp->normal.last_accessed = speculative_pentry;
+	wp->last_accessed = speculative_pentry;
 	// printk("Prediction hit! blocknr = %ld, pentry = %p\n", blocknr, pentry);
 	return 1;
 }
@@ -1074,11 +1101,11 @@ static int handle_hint(struct nova_sb_info *sbi,
 	if (ret < 0)
 		return ret;
 
-	if (unlikely(wp->normal.last_accessed == NULL))
+	if (unlikely(wp->last_accessed == NULL))
 		return 0;
 
 	decr_trust_degree(sbi, next_hint, addr,
-					  wp->normal.last_accessed,
+					  wp->last_accessed,
 					  trust_degree);
 	decr_stream_trust_degree(wp);
 	return 0;
@@ -1087,7 +1114,7 @@ static int handle_hint(struct nova_sb_info *sbi,
 static inline struct nova_rht_entry *
 get_last_accessed(struct nova_write_para_continuous *wp, bool check)
 {
-	struct nova_rht_entry *last_pentry = wp->normal.last_accessed;
+	struct nova_rht_entry *last_pentry = wp->last_accessed;
 	return last_pentry;
 }
 
@@ -1125,8 +1152,8 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 		}
 		if (ret < 0)
 			break;
-		wp->ubuf += PAGE_SIZE;
-		wp->len -= PAGE_SIZE;
+		wp->ubuf += (wp->num << 12);
+		wp->len -= (wp->num << 12);
 		first = false;
 	}
 	// nova_memlock(sbi, &irq_flags);

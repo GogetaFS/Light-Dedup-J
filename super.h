@@ -244,14 +244,17 @@ nova_deref_blocks(struct super_block *sb, unsigned long blocknr,
 	unsigned long num)
 {
 	struct nova_sb_info *sbi = NOVA_SB(sb);
-	struct nova_rht_entry *last_pentry = NULL;
+	// struct nova_rht_entry *last_pentry = NULL;
 	
-	while (num) {
-		light_dedup_decr_ref(&sbi->light_dedup_meta, blocknr,
-			&last_pentry);
-		num -= 1;
-		blocknr += 1;
-	}
+	// while (num) {
+	// 	light_dedup_decr_ref(&sbi->light_dedup_meta, blocknr,
+	// 		&last_pentry);
+	// 	num -= 1;
+	// 	blocknr += 1;
+	// }
+
+	// we support super chunk dedup, as NOVA deref in super chunk gran
+	light_dedup_decr_ref(&sbi->light_dedup_meta, blocknr);
 }
 
 static inline struct nova_super_block

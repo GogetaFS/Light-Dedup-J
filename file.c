@@ -578,7 +578,7 @@ static int advance(struct cow_write_env *env, size_t written,
 		wp->blocknr, env->time, file_size);
 
 	// incorporate fp into file write entry
-	env->entry_data.fp = wp->normal.base.fp;
+	env->entry_data.fp = wp->base.fp;
 
 	ret = nova_append_file_write_entry(env->sb, env->pi, env->inode,
 				&env->entry_data, &env->update);
@@ -586,14 +586,15 @@ static int advance(struct cow_write_env *env, size_t written,
 		nova_dbg("%s: append inode entry failed\n", __func__);
 		return -ENOSPC;
 	}
-	if (wp->blocknr_next != 0) {
-		wp->blocknr = wp->blocknr_next;
-		wp->num = 1;
-		wp->blocknr_next = 0;
-	} else {
-		wp->blocknr = 0;
-		wp->num = 0;
-	}
+
+	// if (wp->blocknr_next != 0) {
+	// 	wp->blocknr = wp->blocknr_next;
+	// 	wp->num = 1;
+	// 	wp->blocknr_next = 0;
+	// } else {
+	// 	wp->blocknr = 0;
+	// 	wp->num = 0;
+	// }
 
 	env->pos += written;
 	if (env->begin_tail == 0)
@@ -700,7 +701,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			__func__, env.inode->i_ino, env.pos, len);
 
 	cpu = get_cpu();
-	wp.normal.last_accessed = per_cpu(last_accessed_fpentry_per_cpu, cpu);
+	wp.last_accessed = per_cpu(last_accessed_fpentry_per_cpu, cpu);
 	wp.stream_trust_degree = per_cpu(stream_trust_degree_per_cpu, cpu);
 	put_cpu();
 	wp.prefetched_blocknr[0] = wp.prefetched_blocknr[1] = 0;
@@ -723,16 +724,25 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
 		wp.ubuf += bytes;
 		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, wp.ubuf, &wp.normal);
+		
+		wp.blocknr = nova_new_data_block(env.sb);
+		wp.num = 1;
+		ret = light_dedup_incr_ref(meta, &wp);
 		if (ret < 0)
 			goto err_out2;
-		wp.blocknr = wp.normal.blocknr;
-		wp.num = 1;
+		else if (ret == DEDUP_SUCCESS)
+			nova_free_data_block(env.sb, wp.blocknr);
+
+		// wp.blocknr = wp.normal.blocknr;
+		// wp.num = 1;
 		ret = advance(&env, bytes, &wp);
 		if (ret < 0)
 			goto err_out2;
 	}
 	while (wp.len >= env.sb->s_blocksize) {
+		wp.num = nova_new_data_blocks(env.sb, env.sih, &wp.blocknr,
+			env.pos >> env.sb->s_blocksize_bits, round_up(wp.len, env.sb->s_blocksize),
+			ALLOC_NO_INIT, ANY_CPU, ALLOC_FROM_HEAD);
 		ret = light_dedup_incr_ref_continuous(sbi, &wp);
 		if (ret < 0)
 			goto err_out2;
@@ -740,12 +750,13 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		if (ret < 0)
 			goto err_out2;
 	}
-	if (wp.num != 0) {
-		ret = advance(&env, wp.num * env.sb->s_blocksize, &wp);
-		if (ret < 0)
-			goto err_out2;
-	}
-	BUG_ON(wp.num != 0);
+	// if (wp.num != 0) {
+	// 	ret = advance(&env, wp.num * env.sb->s_blocksize, &wp);
+	// 	if (ret < 0)
+	// 		goto err_out2;
+	// }
+	// BUG_ON(wp.num != 0);
+
 	if (wp.len != 0) {
 		bytes = wp.len;
 		ret = nova_handle_head_tail_blocks(env.sb, env.inode, env.pos, bytes,
@@ -762,11 +773,14 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
 		wp.ubuf += bytes;
 		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, wp.ubuf, &wp.normal);
+
+		wp.blocknr = nova_new_data_block(env.sb);
+		wp.num = 1;
+		ret = light_dedup_incr_ref(meta, &wp);
 		if (ret < 0)
 			goto err_out2;
-		wp.blocknr = wp.normal.blocknr;
-		wp.num = 1;
+		// wp.blocknr = wp.normal.blocknr;
+		// wp.num = 1;
 		ret = advance(&env, bytes, &wp);
 		if (ret < 0)
 			goto err_out2;
@@ -774,7 +788,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[0], false);
 	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[1], false);
 	cpu = get_cpu();
-	per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp.normal.last_accessed;
+	per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp.last_accessed;
 	// per_cpu(last_new_fpentry_per_cpu, cpu) = wp.normal.last_new_entries[0];
 	per_cpu(stream_trust_degree_per_cpu, cpu) = wp.stream_trust_degree;
 	put_cpu();

@@ -787,9 +787,8 @@ static inline void attach_blocknr(struct nova_write_para_continuous *wp,
 	if (wp->blocknr == 0) {
 		wp->blocknr = blocknr;
 		wp->num = 1;
-	} else if (wp->blocknr + wp->num == blocknr) {
-		wp->num += 1;
 	} else {
+		// we cannot attach as fp is incorporated in the block
 		wp->blocknr_next = blocknr;
 	}
 }

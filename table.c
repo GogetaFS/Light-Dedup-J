@@ -1094,12 +1094,6 @@ static inline struct nova_rht_entry *
 get_last_accessed(struct nova_write_para_continuous *wp, bool check)
 {
 	struct nova_rht_entry *last_pentry = wp->normal.last_accessed;
-	if (check && last_pentry) {
-		printk("last_pentry: %p, NULL_PENTRY: %p\n",
-			last_pentry,
-			NULL_PENTRY);
-		BUG();
-	}
 	return last_pentry;
 }
 

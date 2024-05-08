@@ -689,7 +689,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	wp.blocknr = 0;
 	wp.num = 0;
 	wp.blocknr_next = 0;
-	kbuf_node = generic_cache_alloc(&meta->kbuf_cache, num_blocks << 12, GFP_KERNEL);
+	kbuf_node = generic_cache_alloc(&meta->kbuf_cache, num_blocks << env.sb->s_blocksize_bits, GFP_KERNEL);
 	if (kbuf_node == NULL) {
 		ret = -ENOMEM;
 		goto err_out1;
@@ -697,8 +697,8 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	kbuf_obj = container_of(kbuf_node, struct kbuf_obj, node);
 	wp.kbuf = kbuf_obj->kbuf;
 
-	nova_dbgv("%s: inode %lu, offset %lld, count %lu\n",
-			__func__, env.inode->i_ino, env.pos, len);
+	nova_dbgv("%s: inode %lu, offset %lld, count %lu, num_blocks: %lu\n",
+			__func__, env.inode->i_ino, env.pos, len, num_blocks);
 
 	cpu = get_cpu();
 	wp.last_accessed = per_cpu(last_accessed_fpentry_per_cpu, cpu);
@@ -741,8 +741,9 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	}
 	while (wp.len >= env.sb->s_blocksize) {
 		wp.num = nova_new_data_blocks(env.sb, env.sih, &wp.blocknr,
-			env.pos >> env.sb->s_blocksize_bits, round_up(wp.len, env.sb->s_blocksize),
+			env.pos >> env.sb->s_blocksize_bits, round_up(wp.len, env.sb->s_blocksize) >> env.sb->s_blocksize_bits,
 			ALLOC_NO_INIT, ANY_CPU, ALLOC_FROM_HEAD);
+		// nova_info("wp.num: %lu, wp.blocknr: %lu\n", wp.num, wp.blocknr);
 		ret = light_dedup_incr_ref_continuous(sbi, &wp);
 		if (ret < 0)
 			goto err_out2;

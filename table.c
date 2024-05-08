@@ -364,18 +364,18 @@ fail0:
 static bool cmp_content(struct super_block *sb, unsigned long blocknr, const void *addr, size_t size) {
 	INIT_TIMING(memcmp_time);
 	const char *content;
-	size_t i;
+	size_t i, j;
 	bool res;
 	NOVA_START_TIMING(memcmp_t, memcmp_time);
 	content = nova_blocknr_to_addr(sb, blocknr);
 	// support super chunk
 	for (i = 0; i < size; i += 4096) {
-		for (i = 0; i < 16; ++i)
-			prefetcht0(content + i * 256);
-		for (i = 0; i < 16; ++i) {
-			prefetcht0(content + i * 256 + 64);
-			prefetcht0(content + i * 256 + 64 * 2);
-			prefetcht0(content + i * 256 + 64 * 3);
+		for (j = 0; j < 16; ++j)
+			prefetcht0(content + j * 256);
+		for (j = 0; j < 16; ++j) {
+			prefetcht0(content + j * 256 + 64);
+			prefetcht0(content + j * 256 + 64 * 2);
+			prefetcht0(content + j * 256 + 64 * 3);
 		}
 		res = cmp64((const uint64_t *)content, addr);
 		if (res) {
@@ -386,9 +386,11 @@ static bool cmp_content(struct super_block *sb, unsigned long blocknr, const voi
 	}
 	NOVA_END_TIMING(memcmp_t, memcmp_time);
 	if (res) {
+		printk("Block [%lu, %lu) is not equal to the incoming block.\n", blocknr, blocknr + size / 4096);
 		print(content);
 		printk("\n");
 		print(addr);
+		printk("\n");
 	}
 	return res;
 }
@@ -426,6 +428,9 @@ retry:
 		return ret;
 	}
 	
+	nova_dbgv("Found block %lu with fp %llx in rhashtable %p\n",
+		pentry->blocknr, wp->base.fp.value, rht);
+
 	blocknr = pentry->blocknr;
 
 	BUG_ON(blocknr == 0);
@@ -433,7 +438,7 @@ retry:
 		rcu_read_unlock();
 		wp->last_accessed = NULL;
 		nova_dbg("fp:%llx rentry.fp:%llx",wp->base.fp.value, pentry->fp.value);
-		printk("Collision, just write it.");
+		printk("Collision, just write it.\n");
 		wp->base.refcount = 0;
 		return fill_blocks(sb, wp);
 		// const void *content = nova_get_block(sb, nova_sb_blocknr_to_addr(sb, le64_to_cpu(leaf->blocknr), NOVA_BLOCK_TYPE_4K));
@@ -476,6 +481,7 @@ static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta, struct nov
 
 	NOVA_START_TIMING(incr_ref_t, incr_ref_time);
 	BUG_ON(nova_fp_calc(&meta->fp_ctx, addr, wp->num << 12, &wp->base.fp));
+	nova_dbgv("Fingerprint %llx @ addr %llx\n", wp->base.fp.value, addr);
 	ret = incr_ref_normal(meta, wp);
 	NOVA_END_TIMING(incr_ref_t, incr_ref_time);
 	return ret;
@@ -834,7 +840,7 @@ static int copy_from_user_incr_ref(struct nova_sb_info *sbi,
 	if (ret < 0)
 		return ret;
 	
-	// attach_blocknr(wp, wp->normal.blocknr);
+	// attach_blocknr(wp, wp->blocknr);
 
 	return 0;
 }
@@ -1134,30 +1140,26 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 	struct nova_rht_entry *last_pentry;
 	bool first = true;
 	int ret = 0;
-	// unsigned long irq_flags = 0;
 	INIT_TIMING(time);
 
 	NOVA_START_TIMING(incr_ref_continuous_t, time);
-	// Unlock here because it seems that wprotect will affect prefetching
-	// nova_memunlock(sbi, &irq_flags);
-	while (wp->blocknr_next == 0 && wp->len >= PAGE_SIZE) {
-		last_pentry = get_last_accessed(wp, !first);
-		while (1) {
-			ret = handle_last_accessed_pentry(sbi, wp, last_pentry);
-			if (likely(ret != -EAGAIN))
-				break;
-			// nova_memlock(sbi, &irq_flags);
-			schedule();
-			// nova_memunlock(sbi, &irq_flags);
-		}
-		if (ret < 0)
+	last_pentry = get_last_accessed(wp, !first);
+	while (1) {
+		ret = handle_last_accessed_pentry(sbi, wp, last_pentry);
+		if (likely(ret != -EAGAIN))
 			break;
-		wp->ubuf += (wp->num << 12);
-		wp->len -= (wp->num << 12);
-		first = false;
+		// nova_memlock(sbi, &irq_flags);
+		schedule();
+		// nova_memunlock(sbi, &irq_flags);
 	}
-	// nova_memlock(sbi, &irq_flags);
+	
+	if (ret < 0)
+		goto out;
+
+	wp->ubuf += (wp->num << 12);
+	wp->len -= (wp->num << 12);
 	NOVA_END_TIMING(incr_ref_continuous_t, time);
+out:
 	return ret;
 }
 

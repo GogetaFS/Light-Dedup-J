@@ -837,12 +837,11 @@ static int copy_from_user_incr_ref(struct nova_sb_info *sbi,
 		return -EFAULT;
 	
 	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, wp);
-	if (ret < 0)
-		return ret;
-	
+	// if (ret < 0)
 	// attach_blocknr(wp, wp->blocknr);
-
-	return 0;
+	// return 0;
+	
+	return ret;
 }
 
 static int handle_no_hint(struct nova_sb_info *sbi,
@@ -852,7 +851,7 @@ static int handle_no_hint(struct nova_sb_info *sbi,
 	u64 addr;
 	uint8_t trust_degree;
 	uint64_t hint;
-	int ret;
+	int ret = DEDUP_SUCCESS;
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(update_hint_time);
 
@@ -879,7 +878,7 @@ static int handle_no_hint(struct nova_sb_info *sbi,
 	// 	&irq_flags);
 	// nova_flush_cacheline(next_hint, false);
 	NOVA_END_TIMING(update_hint_t, update_hint_time);
-	return 0;
+	return ret;
 }
 
 static int handle_not_trust(struct nova_sb_info *sbi,
@@ -887,12 +886,12 @@ static int handle_not_trust(struct nova_sb_info *sbi,
 	u64 addr, uint8_t trust_degree)
 {
 	u64 addr_new;
-	int ret;
+	int ret = DEDUP_SUCCESS;
 	ret = copy_from_user_incr_ref(sbi, wp);
 	if (ret < 0)
 		return ret;
 	if (unlikely(wp->last_accessed == NULL))
-		return 0;
+		return ret;
 	addr_new = wp->last_accessed;
 	if (addr_new == addr) {
 		NOVA_STATS_ADD(hint_not_trusted_hit, 1);
@@ -904,7 +903,7 @@ static int handle_not_trust(struct nova_sb_info *sbi,
 			trust_degree);
 		decr_stream_trust_degree(wp);
 	}
-	return 0;
+	return ret;
 }
 
 // The caller should hold rcu_read_lock
@@ -974,7 +973,7 @@ static int check_hint(struct nova_sb_info *sbi,
 	struct light_dedup_meta *meta = &sbi->light_dedup_meta;
 	unsigned long speculative_blocknr;
 	const char *speculative_addr;
-	size_t i;
+	size_t i, j;
 	int64_t ret;
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(prefetch_cmp_time);
@@ -1036,14 +1035,42 @@ static int check_hint(struct nova_sb_info *sbi,
 	rcu_read_unlock();
 
 	// prefetch the pentry.next_hint
-	prefetch_next_stage_1(wp);
+	// prefetch_next_stage_1(wp);
 
 	NOVA_START_TIMING(cmp_user_t, cmp_user_time);
-	ret = cmp_user_generic_const_8B_aligned(wp->ubuf, speculative_addr, PAGE_SIZE);
+	for (j = 0; j < (wp->num << 12); j += 4096) {
+		// prefetch next chunk if j is not the last chunk
+		if (j != 0) {
+			for (i = 0; i < PAGE_SIZE; i += 256)
+				prefetcht0(speculative_addr + j + i);
+			for (i = 0; i < PAGE_SIZE; i += 256) {
+				prefetcht0(speculative_addr + j + i + 64);
+				prefetcht0(speculative_addr + j + i + 64 * 2);
+				prefetcht0(speculative_addr + j + i + 64 * 3);
+			}
+		}
+
+		if (j + 4096 < (wp->num << 12)) {
+			for (i = 0; i < 8; ++i) {
+				prefetcht2(speculative_addr + j + 4096 + i * 256);
+			}
+		}
+		
+		ret = cmp_user_generic_const_8B_aligned(wp->ubuf + j, speculative_addr + j, PAGE_SIZE);
+		if (ret) {
+			break;
+		}
+
+		if (j + 4096 < (wp->num << 12)) {
+			for (i = 8; i < 16; ++i) {
+				prefetcht2(speculative_addr + j + 4096 + i * 256);
+			}
+		}
+	}
 	NOVA_END_TIMING(cmp_user_t, cmp_user_time);
 
 	// prefetch the pentry.next_hint
-	prefetch_next_stage_2(wp);
+	// prefetch_next_stage_2(wp);
 
 	if (ret < 0) {
 		decr_ref(meta, speculative_pentry);
@@ -1097,7 +1124,7 @@ static int handle_hint(struct nova_sb_info *sbi,
 		NOVA_STATS_ADD(predict_hit, 1);
 		incr_trust_degree(sbi, next_hint, addr, trust_degree);
 		incr_stream_trust_degree(wp);
-		return 0;
+		return DEDUP_SUCCESS;
 	}
 
 	NOVA_STATS_ADD(predict_miss, 1);
@@ -1114,7 +1141,7 @@ static int handle_hint(struct nova_sb_info *sbi,
 					  wp->last_accessed,
 					  trust_degree);
 	decr_stream_trust_degree(wp);
-	return 0;
+	return NO_DEDUP;
 }
 
 static inline struct nova_rht_entry *
@@ -1139,7 +1166,7 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 {
 	struct nova_rht_entry *last_pentry;
 	bool first = true;
-	int ret = 0;
+	int ret = DEDUP_SUCCESS;
 	INIT_TIMING(time);
 
 	NOVA_START_TIMING(incr_ref_continuous_t, time);

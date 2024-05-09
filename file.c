@@ -616,7 +616,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	struct light_dedup_meta *meta;
 	struct nova_inode inode_copy;
 	size_t offset, bytes;
-	unsigned long num_blocks;
+	unsigned long num_blocks, num;
 	struct hlist_node *kbuf_node;
 	struct kbuf_obj *kbuf_obj;
 	struct nova_write_para_continuous wp;
@@ -740,8 +740,9 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 	}
 	while (wp.len >= env.sb->s_blocksize) {
+		num = round_up(wp.len, env.sb->s_blocksize) >> env.sb->s_blocksize_bits;
 		wp.num = nova_new_data_blocks(env.sb, env.sih, &wp.blocknr,
-			env.pos >> env.sb->s_blocksize_bits, round_up(wp.len, env.sb->s_blocksize) >> env.sb->s_blocksize_bits,
+			env.pos >> env.sb->s_blocksize_bits, num,
 			ALLOC_NO_INIT, ANY_CPU, ALLOC_FROM_HEAD);
 		// nova_info("wp.num: %lu, wp.blocknr: %lu\n", wp.num, wp.blocknr);
 		ret = light_dedup_incr_ref_continuous(sbi, &wp);

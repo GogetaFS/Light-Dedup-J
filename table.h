@@ -78,6 +78,9 @@ struct nova_write_para_continuous {
 	unsigned long prefetched_blocknr[2];
 };
 
+#define DEDUP_SUCCESS 0
+#define NO_DEDUP 1
+
 struct light_dedup_meta {
 	struct super_block *sblock;
 	struct generic_cache kbuf_cache;

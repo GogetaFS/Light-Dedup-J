@@ -578,7 +578,10 @@ static int advance(struct cow_write_env *env, size_t written,
 		wp->blocknr, env->time, file_size);
 
 	// incorporate fp into file write entry
-	env->entry_data.fp = wp->normal.base.fp;
+	if (wp->num == 1)
+		env->entry_data.fp = wp->normal.base.fp;
+	else
+		env->entry_data.fp.value = wp->blocknr;
 
 	ret = nova_append_file_write_entry(env->sb, env->pi, env->inode,
 				&env->entry_data, &env->update);

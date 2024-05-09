@@ -216,8 +216,9 @@ struct nova_sb_info {
 	// unsigned long region_blocknr_start;
 	// unsigned long first_counter_block_start;
 	// unsigned long entry_refcount_record_start;
-	unsigned long deref_table;
-
+	// unsigned long deref_table;
+	
+	unsigned long extent_table;
 	struct light_dedup_meta light_dedup_meta;
 };
 

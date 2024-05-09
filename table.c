@@ -240,7 +240,7 @@ static int alloc_and_fill_block(
 	memcpy_to_pmem_nocache(xmem, wp->ubuf, 4096);
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
-	return 0;
+	return NO_DEDUP;
 }
 
 #if 0
@@ -391,7 +391,7 @@ retry:
 		if (ret == -EEXIST)
 			goto retry;
 		wp->base.refcount = 1;
-		return ret;
+		return NO_DEDUP;
 	}
 	
 	blocknr = pentry->blocknr;
@@ -427,7 +427,7 @@ retry:
 	wp->last_accessed = pentry;
 	// printk("Block %lu (fpentry %p) has refcount %lld now\n",
 	// 	wp->blocknr, pentry, wp->base.refcount);
-	return 0;
+	return DEDUP_SUCCESS;
 }
 
 static int incr_ref_normal(struct light_dedup_meta *meta,
@@ -784,11 +784,13 @@ static inline u64 decr_trust_degree(struct nova_sb_info *sbi,
 static inline void attach_blocknr(struct nova_write_para_continuous *wp,
 	unsigned long blocknr)
 {
+	// we still want to gather the block information
 	if (wp->blocknr == 0) {
 		wp->blocknr = blocknr;
 		wp->num = 1;
+	} else if (wp->blocknr + wp->num == blocknr) {
+		wp->num += 1;
 	} else {
-		// we cannot attach as fp is incorporated in the block
 		wp->blocknr_next = blocknr;
 	}
 }
@@ -819,7 +821,7 @@ static int handle_no_hint(struct nova_sb_info *sbi,
 	u64 addr;
 	uint8_t trust_degree;
 	uint64_t hint;
-	int ret;
+	int ret = DEDUP_SUCCESS;
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(update_hint_time);
 
@@ -846,7 +848,7 @@ static int handle_no_hint(struct nova_sb_info *sbi,
 	// 	&irq_flags);
 	// nova_flush_cacheline(next_hint, false);
 	NOVA_END_TIMING(update_hint_t, update_hint_time);
-	return 0;
+	return ret;
 }
 
 static int handle_not_trust(struct nova_sb_info *sbi,
@@ -854,7 +856,7 @@ static int handle_not_trust(struct nova_sb_info *sbi,
 	u64 addr, uint8_t trust_degree)
 {
 	u64 addr_new;
-	int ret;
+	int ret = DEDUP_SUCCESS;
 	ret = copy_from_user_incr_ref(sbi, wp);
 	if (ret < 0)
 		return ret;
@@ -871,7 +873,7 @@ static int handle_not_trust(struct nova_sb_info *sbi,
 			trust_degree);
 		decr_stream_trust_degree(wp);
 	}
-	return 0;
+	return ret;
 }
 
 // The caller should hold rcu_read_lock
@@ -1064,7 +1066,7 @@ static int handle_hint(struct nova_sb_info *sbi,
 		NOVA_STATS_ADD(predict_hit, 1);
 		incr_trust_degree(sbi, next_hint, addr, trust_degree);
 		incr_stream_trust_degree(wp);
-		return 0;
+		return DEDUP_SUCCESS;
 	}
 
 	NOVA_STATS_ADD(predict_miss, 1);
@@ -1075,13 +1077,13 @@ static int handle_hint(struct nova_sb_info *sbi,
 		return ret;
 
 	if (unlikely(wp->normal.last_accessed == NULL))
-		return 0;
+		return ret;
 
 	decr_trust_degree(sbi, next_hint, addr,
 					  wp->normal.last_accessed,
 					  trust_degree);
 	decr_stream_trust_degree(wp);
-	return 0;
+	return ret;
 }
 
 static inline struct nova_rht_entry *
@@ -1101,18 +1103,27 @@ static int handle_last_accessed_pentry(struct nova_sb_info *sbi,
 	}
 }
 
+struct entry_node {
+	struct list_head list;
+	struct nova_rht_entry *last_pentry;
+};
+
 int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 	struct nova_write_para_continuous *wp)
 {
 	struct nova_rht_entry *last_pentry;
 	bool first = true;
-	int ret = 0;
+	struct list_head entry_list;
+	struct entry_node *node, *tmp;
+	unsigned long flush_start_blocknr = 0, flush_end_blocknr = 0;
+	int ret = DEDUP_SUCCESS, num = 0;
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(time);
 
 	NOVA_START_TIMING(incr_ref_continuous_t, time);
 	// Unlock here because it seems that wprotect will affect prefetching
 	// nova_memunlock(sbi, &irq_flags);
+	INIT_LIST_HEAD(&entry_list);
 	while (wp->blocknr_next == 0 && wp->len >= PAGE_SIZE) {
 		last_pentry = get_last_accessed(wp, !first);
 		while (1) {
@@ -1123,12 +1134,51 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 			schedule();
 			// nova_memunlock(sbi, &irq_flags);
 		}
+		
 		if (ret < 0)
 			break;
+		
+		if (ret == NO_DEDUP) {
+			node = kmalloc(sizeof(struct entry_node), GFP_ATOMIC);
+			node->last_pentry = get_last_accessed(wp, !first);
+			list_add_tail(&node->list, &entry_list);
+		}
+
 		wp->ubuf += PAGE_SIZE;
 		wp->len -= PAGE_SIZE;
 		first = false;
+		num++;
 	}
+	
+	__le64 *extent_table = nova_sbi_blocknr_to_addr(sbi, sbi->extent_table);
+	list_for_each_entry_safe(node, tmp, &entry_list, list) {
+		// if num == 1, we embed fp into file write entry.
+		if (num > 1) {
+			extent_table[node->last_pentry->blocknr] = node->last_pentry->fp.value;
+			
+			if (flush_start_blocknr == 0) {
+				flush_start_blocknr = node->last_pentry->blocknr;
+				flush_end_blocknr = flush_start_blocknr;
+			} else if (flush_end_blocknr + 1 == node->last_pentry->blocknr) {
+				flush_end_blocknr += 1;
+			} else {
+				nova_flush_buffer(extent_table + flush_start_blocknr,
+					(flush_end_blocknr - flush_start_blocknr + 1) * sizeof(__le64), false);
+				flush_start_blocknr = node->last_pentry->blocknr;
+				flush_end_blocknr = flush_start_blocknr;
+			}
+		}
+		
+		list_del(&node->list);
+		kfree(node);
+	}
+	
+	if (num > 1) {
+		nova_flush_buffer(extent_table + flush_start_blocknr,
+					(flush_end_blocknr - flush_start_blocknr + 1) * sizeof(__le64), false);
+		PERSISTENT_BARRIER();
+	}
+
 	// nova_memlock(sbi, &irq_flags);
 	NOVA_END_TIMING(incr_ref_continuous_t, time);
 	return ret;

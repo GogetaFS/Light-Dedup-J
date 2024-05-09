@@ -1150,11 +1150,11 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 		num++;
 	}
 	
-	__le64 *extent_table = nova_sbi_blocknr_to_addr(sbi, sbi->extent_table);
+	struct nova_fp *extent_table = nova_sbi_blocknr_to_addr(sbi, sbi->extent_table);
 	list_for_each_entry_safe(node, tmp, &entry_list, list) {
 		// if num == 1, we embed fp into file write entry.
 		if (num > 1) {
-			extent_table[node->last_pentry->blocknr] = node->last_pentry->fp.value;
+			extent_table[node->last_pentry->blocknr] = node->last_pentry->fp;
 			
 			if (flush_start_blocknr == 0) {
 				flush_start_blocknr = node->last_pentry->blocknr;
@@ -1163,7 +1163,7 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 				flush_end_blocknr += 1;
 			} else {
 				nova_flush_buffer(extent_table + flush_start_blocknr,
-					(flush_end_blocknr - flush_start_blocknr + 1) * sizeof(__le64), false);
+					(flush_end_blocknr - flush_start_blocknr + 1) * sizeof(struct nova_fp), false);
 				flush_start_blocknr = node->last_pentry->blocknr;
 				flush_end_blocknr = flush_start_blocknr;
 			}
@@ -1176,7 +1176,8 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 	if (num > 1) {
 		nova_flush_buffer(extent_table + flush_start_blocknr,
 					(flush_end_blocknr - flush_start_blocknr + 1) * sizeof(__le64), false);
-		PERSISTENT_BARRIER();
+		// NOTE: we do not need fence here as persisting write entry require the fence
+		//       and the entry is not commit until the log tail is updated atomically
 	}
 
 	// nova_memlock(sbi, &irq_flags);

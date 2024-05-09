@@ -565,6 +565,7 @@ static int advance(struct cow_write_env *env, size_t written,
 	struct nova_write_para_continuous *wp)
 {
 	u64 file_size;
+	struct nova_fp empty_fp = {0};
 	int ret;
 
 	BUG_ON(written == 0);
@@ -581,7 +582,7 @@ static int advance(struct cow_write_env *env, size_t written,
 	if (wp->num == 1)
 		env->entry_data.fp = wp->normal.base.fp;
 	else
-		env->entry_data.fp.value = wp->blocknr;
+		env->entry_data.fp = empty_fp;
 
 	ret = nova_append_file_write_entry(env->sb, env->pi, env->inode,
 				&env->entry_data, &env->update);

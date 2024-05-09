@@ -82,13 +82,11 @@ struct nova_file_write_entry {
 	__le64	epoch_id;
 	__le64	trans_id;
 	union {
-		struct {
-			__le32	csumpadding;
-			__le32	csum;
-		};
+		__le32	csumpadding;
 		/* For Light-Dedup */
 		struct nova_fp fp;
-	}
+	};
+	__le32	csum;
 } __attribute((__packed__));
 _Static_assert(sizeof(struct nova_file_write_entry) == 64, "!!!");
 

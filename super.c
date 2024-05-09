@@ -171,6 +171,9 @@ static int nova_get_nvmm_info(struct super_block *sb,
 	sbi->replica_reserved_inodes_addr = (char *)sbi->replica_sb_addr - PAGE_SIZE;
 	sbi->block_end = sbi->num_blocks - 2;
 
+	sbi->fp2pbn_table = sbi->block_start;
+	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_rht_entry_pm) - 1) >> PAGE_SHIFT) + 1;
+
 	sbi->extent_table = sbi->block_start;
 	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_fp) - 1) >> PAGE_SHIFT) + 1;
 	// sbi->region_start = sbi->block_start;

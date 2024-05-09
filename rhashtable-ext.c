@@ -75,11 +75,13 @@ struct rhashtable_traverse_para_shared {
 	void (*fn_worker_init)(void *arg);
 	void (*fn_worker_finish)(void *arg);
 };
+
 struct rhashtable_traverse_para {
 	struct rhashtable_traverse_para_shared *shared;
 	unsigned int start, end;
         void *arg;
 };
+
 static int rhashtable_traverse_func(void *__para)
 {
 	struct rhashtable_traverse_para *para =
@@ -90,6 +92,7 @@ static int rhashtable_traverse_func(void *__para)
 		para->shared->fn_worker_finish, para->arg);
 	return 0;
 }
+
 static int __rhashtable_traverse_multithread(struct rhashtable *ht,
         struct bucket_table *tbl, int thread_num,
         void (*fn)(void *ptr, void *arg),
@@ -161,6 +164,7 @@ out1:
 out0:
 	return ret;
 }
+
 int rhashtable_traverse_multithread(struct rhashtable *ht, int thread_num,
         void (*fn)(void *ptr, void *arg),
 	void (*fn_worker_init)(void *arg),

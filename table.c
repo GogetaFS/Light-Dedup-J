@@ -1187,95 +1187,109 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 
 struct rht_save_local_arg {
 	size_t cur, end;
-	struct nova_entry_refcount_record *rec;
+	struct nova_rht_entry_pm *rec;
 	atomic64_t *saved;
 	struct nova_sb_info *sbi;
 	unsigned long irq_flags;
 };
+
 struct rht_save_factory_arg {
 	struct nova_sb_info *sbi;
 	atomic64_t saved;
 };
-// static void *rht_save_local_arg_factory(void *factory_arg) {
-// 	struct rht_save_factory_arg *arg =
-// 		(struct rht_save_factory_arg *)factory_arg;
-// 	struct nova_sb_info *sbi = arg->sbi;
-// 	struct rht_save_local_arg *local_arg = kmalloc(
-// 		sizeof(struct rht_save_local_arg), GFP_ATOMIC);
-// 	if (local_arg == NULL)
-// 		return ERR_PTR(-ENOMEM);
-// 	local_arg->cur = 0;
-// 	local_arg->end = 0;
-// 	local_arg->rec = nova_sbi_blocknr_to_addr(
-// 		sbi, sbi->entry_refcount_record_start);
-// 	local_arg->saved = &arg->saved;
-// 	local_arg->sbi = sbi;
-// 	local_arg->irq_flags = 0;
-// 	return local_arg;
-// }
-// static void rht_save_local_arg_recycler(void *local_arg)
-// {
-// 	struct rht_save_local_arg *arg =
-// 		(struct rht_save_local_arg *)local_arg;
-// 	memset_nt(arg->rec + arg->cur,
-// 		(arg->end - arg->cur) *
-// 			sizeof(struct nova_entry_refcount_record),
-// 		0);
-// 	kfree(arg);
-// }
-// static void rht_save_worker_init(void *local_arg)
-// {
-// 	struct rht_save_local_arg *arg =
-// 		(struct rht_save_local_arg *)local_arg;
-// 	nova_memunlock(arg->sbi, &arg->irq_flags);
-// }
-// static void rht_save_worker_finish(void *local_arg)
-// {
-// 	struct rht_save_local_arg *arg =
-// 		(struct rht_save_local_arg *)local_arg;
-// 	nova_memlock(arg->sbi, &arg->irq_flags);
-// 	PERSISTENT_BARRIER();
-// }
-// static void rht_save_func(void *ptr, void *local_arg)
-// {
-// 	struct nova_rht_entry *entry = (struct nova_rht_entry *)ptr;
-// 	struct rht_save_local_arg *arg =
-// 		(struct rht_save_local_arg *)local_arg;
-// 	// printk("%s: entry = %p, rec = %p, cur = %lu\n", __func__, entry, arg->rec, arg->cur);
-// 	// TODO: Make it a list
-// 	if (arg->cur == arg->end) {
-// 		arg->end = atomic64_add_return(ENTRY_PER_REGION, arg->saved);
-// 		arg->cur = arg->end - ENTRY_PER_REGION;
-// 		// printk("New region to save, start = %lu, end = %lu\n", arg->cur, arg->end);
-// 	}
-// 	nova_ntstore_val(&arg->rec[arg->cur].entry_offset,
-// 		cpu_to_le64(nova_get_addr_off(arg->sbi, entry->pentry)));
-// 	++arg->cur;
-// }
-// static void rht_save(struct nova_sb_info *sbi,
-// 	struct nova_recover_meta *recover_meta, struct rhashtable *rht)
-// {
-// 	struct rht_save_factory_arg factory_arg;
-// 	uint64_t saved;
-// 	INIT_TIMING(save_refcount_time);
 
-// 	NOVA_START_TIMING(rht_save_t, save_refcount_time);
-// 	atomic64_set(&factory_arg.saved, 0);
-// 	factory_arg.sbi = sbi;
-// 	if (rhashtable_traverse_multithread(
-// 		rht, sbi->cpus, rht_save_func, rht_save_worker_init,
-// 		rht_save_worker_finish, rht_save_local_arg_factory,
-// 		rht_save_local_arg_recycler, &factory_arg) < 0)
-// 	{
-// 		nova_warn("%s: Fail to save the fingerprint table with multithread. Fall back to single thread.", __func__);
-// 		BUG(); // TODO
-// 	}
-// 	saved = atomic64_read(&factory_arg.saved);
-// 	nova_unlock_write_flush(sbi, &recover_meta->refcount_record_num,
-// 		cpu_to_le64(saved), true);
-// 	printk("About %llu entries in hash table saved in NVM.", saved);
-// 	NOVA_END_TIMING(rht_save_t, save_refcount_time);
-// }
+static void *rht_save_local_arg_factory(void *factory_arg) {
+	struct rht_save_factory_arg *arg =
+		(struct rht_save_factory_arg *)factory_arg;
+	struct nova_sb_info *sbi = arg->sbi;
+	struct rht_save_local_arg *local_arg = kmalloc(
+		sizeof(struct rht_save_local_arg), GFP_ATOMIC);
+	if (local_arg == NULL)
+		return ERR_PTR(-ENOMEM);
+	local_arg->cur = 0;
+	local_arg->end = 0;
+	local_arg->rec = nova_sbi_blocknr_to_addr(
+		sbi, sbi->fp2pbn_table);
+	local_arg->saved = &arg->saved;
+	local_arg->sbi = sbi;
+	local_arg->irq_flags = 0;
+	return local_arg;
+}
+
+static void rht_save_local_arg_recycler(void *local_arg)
+{
+	struct rht_save_local_arg *arg =
+		(struct rht_save_local_arg *)local_arg;
+	memset_nt(arg->rec + arg->cur,
+		(arg->end - arg->cur) *
+			sizeof(struct nova_rht_entry_pm),
+		0);
+	kfree(arg);
+}
+
+static void rht_save_worker_init(void *local_arg)
+{
+	struct rht_save_local_arg *arg =
+		(struct rht_save_local_arg *)local_arg;
+	nova_memunlock(arg->sbi, &arg->irq_flags);
+}
+
+static void rht_save_worker_finish(void *local_arg)
+{
+	struct rht_save_local_arg *arg =
+		(struct rht_save_local_arg *)local_arg;
+	nova_memlock(arg->sbi, &arg->irq_flags);
+	PERSISTENT_BARRIER();
+}
+
+static void rht_save_func(void *ptr, void *local_arg)
+{
+	struct nova_rht_entry *entry = (struct nova_rht_entry *)ptr;
+	struct rht_save_local_arg *arg =
+		(struct rht_save_local_arg *)local_arg;
+	// printk("%s: entry = %p, rec = %p, cur = %lu\n", __func__, entry, arg->rec, arg->cur);
+	// TODO: Make it a list
+	if (arg->cur == arg->end) {
+		arg->end = atomic64_add_return(RHT_ENTRY_PER_BLOCK, arg->saved);
+		arg->cur = arg->end - RHT_ENTRY_PER_BLOCK;
+		// printk("New region to save, start = %lu, end = %lu\n", arg->cur, arg->end);
+	}
+	// nova_ntstore_val(&arg->rec[arg->cur].entry_offset,
+	// 	cpu_to_le64(nova_get_addr_off(arg->sbi, entry->pentry)));
+	arg->rec[arg->cur].blocknr = entry->blocknr;
+	arg->rec[arg->cur].fp = entry->fp;
+	arg->rec[arg->cur].refcount = atomic64_read(&entry->refcount);
+	++arg->cur;
+}
+
+static void rht_save(struct nova_sb_info *sbi,
+	struct light_dedup_recover_meta *recover_meta, struct rhashtable *rht)
+{
+	struct rht_save_factory_arg factory_arg;
+	uint64_t saved;
+	INIT_TIMING(save_refcount_time);
+
+	NOVA_START_TIMING(rht_save_t, save_refcount_time);
+	atomic64_set(&factory_arg.saved, 0);
+	factory_arg.sbi = sbi;
+	if (rhashtable_traverse_multithread(
+		rht, sbi->cpus, rht_save_func, rht_save_worker_init,
+		rht_save_worker_finish, rht_save_local_arg_factory,
+		rht_save_local_arg_recycler, &factory_arg) < 0)
+	{
+		nova_warn("%s: Fail to save the fingerprint table with multithread. Fall back to single thread.", __func__);
+		BUG(); // TODO
+	}
+	saved = atomic64_read(&factory_arg.saved);
+	nova_unlock_write_flush(sbi, &recover_meta->refcount_record_num,
+		cpu_to_le64(saved), true);
+	
+	// flush in batch
+	nova_flush_buffer(sbi->fp2pbn_table, saved * sizeof(struct nova_rht_entry_pm), true);
+	
+	printk("About %llu entries in hash table saved in NVM.", saved);
+	NOVA_END_TIMING(rht_save_t, save_refcount_time);
+}
 
 // struct rht_recover_para {
 // 	struct light_dedup_meta *meta;
@@ -1475,7 +1489,7 @@ int light_dedup_meta_restore(struct light_dedup_meta *meta,
 	struct super_block *sb)
 {
 	struct nova_sb_info *sbi = NOVA_SB(sb);
-	struct nova_recover_meta *recover_meta = nova_get_recover_meta(sbi);
+	struct light_dedup_recover_meta *recover_meta = light_dedup_get_recover_meta(sbi);
 	int ret;
 	INIT_TIMING(normal_recover_fp_table_time);
 
@@ -1509,12 +1523,12 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 {
 	struct super_block *sb = meta->sblock;
 	struct nova_sb_info *sbi = NOVA_SB(sb);
-	struct nova_recover_meta *recover_meta = nova_get_recover_meta(sbi);
+	struct light_dedup_recover_meta *recover_meta = light_dedup_get_recover_meta(sbi);
 	
 	// TODO: we might store several entries of FP to PBN and 
 	// PBN to FP to speedup recovery
+	rht_save(sbi, recover_meta, &meta->rht);
 
-	// rht_save(sbi, recover_meta, &meta->rht);
 	// nova_save_entry_allocator(sb, &meta->entry_allocator);
 	// nova_unlock_write_flush(sbi, &recover_meta->saved,
 	// 	NOVA_RECOVER_META_FLAG_COMPLETE, true);

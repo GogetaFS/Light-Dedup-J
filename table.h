@@ -18,10 +18,15 @@
 
 _Static_assert(sizeof(unsigned long) == sizeof(uint64_t), "You should make all blocknr 64 bit");
 
-struct nova_entry_refcount_record {
-	__le64 entry_offset;
-};
+struct nova_rht_entry_pm {
+	struct nova_fp fp;
+	unsigned long blocknr;
+	unsigned long refcount;
+} __attribute__((packed));
 
+#define RHT_ENTRY_PER_BLOCK (PAGE_SIZE / sizeof(struct nova_rht_entry_pm))
+
+_Static_assert(sizeof(struct nova_rht_entry_pm) == 20, "sizeof struct nova_rht_entry_pm != 20 !!!");
 _Static_assert(sizeof(unsigned long) == sizeof(void *), "sizeof unsigned long != sizeof void * !!!");
 
 struct nova_write_para_base {

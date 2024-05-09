@@ -84,7 +84,7 @@ struct nova_super_block {
 
 #define SUPER_BLOCK_START       0 // Superblock
 #define	RESERVE_INODE_START	1 // Reserved inodes
-#define RECOVER_META_START 15
+#define LIGHT_DEDUP_RECOVER_META_START 15
 #define	INODE_TABLE0_START	16 // inode table
 #define	INODE_TABLE1_START	32 // replica inode table
 #define	JOURNAL_START		48 // journal pointer table
@@ -110,7 +110,7 @@ struct nova_super_block {
 #define NOVA_NORMAL_INODE_START      (32)
 
 #define NOVA_RECOVER_META_FLAG_COMPLETE (0x3f)
-struct nova_recover_meta {
+struct light_dedup_recover_meta {
 	// u8 free_entrynr_saved;
 	u8 saved;
 	u8 __padding[7];
@@ -122,7 +122,7 @@ struct nova_recover_meta {
 	__le64 last_counter_block_tail_offset;
 	__le64 refcount_record_num;
 };
-_Static_assert(sizeof(struct nova_recover_meta) <= PAGE_SIZE, "struct nova_recover_meta too large!");
+_Static_assert(sizeof(struct light_dedup_recover_meta) <= PAGE_SIZE, "struct light_dedup_recover_meta too large!");
 
 
 /*
@@ -217,7 +217,7 @@ struct nova_sb_info {
 	// unsigned long first_counter_block_start;
 	// unsigned long entry_refcount_record_start;
 	// unsigned long deref_table;
-	
+	unsigned long fp2pbn_table;
 	unsigned long extent_table;
 	struct light_dedup_meta light_dedup_meta;
 };
@@ -294,10 +294,10 @@ nova_sbi_blocknr_to_addr(struct nova_sb_info *sbi, unsigned long blocknr)
 	return nova_sbi_get_block(sbi, nova_get_blocknr_off(blocknr));
 }
 
-static inline struct nova_recover_meta *
-nova_get_recover_meta(struct nova_sb_info *sbi)
+static inline struct light_dedup_recover_meta *
+light_dedup_get_recover_meta(struct nova_sb_info *sbi)
 {
-	return nova_sbi_blocknr_to_addr(sbi, RECOVER_META_START);
+	return nova_sbi_blocknr_to_addr(sbi, LIGHT_DEDUP_RECOVER_META_START);
 }
 
 extern struct super_block *nova_read_super(struct super_block *sb, void *data,

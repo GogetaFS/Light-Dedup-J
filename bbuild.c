@@ -1664,7 +1664,7 @@ static bool nova_try_normal_recovery(struct super_block *sb)
 {
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct nova_inode *pi =  nova_get_inode_by_ino(sb, NOVA_BLOCKNODE_INO);
-	struct nova_recover_meta *recover_meta = nova_get_recover_meta(sbi);
+	struct light_dedup_recover_meta *recover_meta = light_dedup_get_recover_meta(sbi);
 	int ret;
 
 	if (recover_meta->saved != NOVA_RECOVER_META_FLAG_COMPLETE)

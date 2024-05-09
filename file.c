@@ -747,6 +747,8 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		ret = light_dedup_incr_ref_continuous(sbi, &wp);
 		if (ret < 0)
 			goto err_out2;
+		else if (ret == DEDUP_SUCCESS)
+			nova_free_data_blocks(env.sb, env.sih, wp.blocknr, wp.num);
 		ret = advance(&env, wp.num * env.sb->s_blocksize, &wp);
 		if (ret < 0)
 			goto err_out2;
@@ -780,6 +782,8 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		ret = light_dedup_incr_ref(meta, &wp);
 		if (ret < 0)
 			goto err_out2;
+		else if (ret == DEDUP_SUCCESS)
+			nova_free_data_block(env.sb, wp.blocknr);
 		// wp.blocknr = wp.normal.blocknr;
 		// wp.num = 1;
 		ret = advance(&env, bytes, &wp);

@@ -355,11 +355,11 @@ static bool cmp_content(struct super_block *sb, unsigned long blocknr, const voi
 	}
 	res = cmp64((const uint64_t *)content, addr);
 	NOVA_END_TIMING(memcmp_t, memcmp_time);
-	if (res) {
-		print(content);
-		printk("\n");
-		print(addr);
-	}
+	// if (res) {
+	// 	print(content);
+	// 	nova_dbgv("\n");
+	// 	print(addr);
+	// }
 	return res;
 }
 
@@ -400,8 +400,8 @@ retry:
 	if (cmp_content(sb, blocknr, wp->addr)) {
 		rcu_read_unlock();
 		wp->last_accessed = NULL;
-		nova_dbg("fp:%llx rentry.fp:%llx",wp->base.fp.value, pentry->fp.value);
-		printk("Collision, just write it.");
+		nova_dbgv("fp:%llx rentry.fp:%llx",wp->base.fp.value, pentry->fp.value);
+		nova_dbg("Collision, just write it.");
 		wp->base.refcount = 0;
 		return get_new_block(sb, wp);
 		// const void *content = nova_get_block(sb, nova_sb_blocknr_to_addr(sb, le64_to_cpu(leaf->blocknr), NOVA_BLOCK_TYPE_4K));
@@ -1247,7 +1247,7 @@ static void rht_save_func(void *ptr, void *local_arg)
 	struct nova_rht_entry *entry = (struct nova_rht_entry *)ptr;
 	struct rht_save_local_arg *arg =
 		(struct rht_save_local_arg *)local_arg;
-	// printk("%s: entry = %p, rec = %p, cur = %lu\n", __func__, entry, arg->rec, arg->cur);
+	// printk("%s: entry = %p, rec = %llx, cur = %lu\n", __func__, entry, arg->rec, arg->cur);
 	// TODO: Make it a list
 	if (arg->cur == arg->end) {
 		arg->end = atomic64_add_return(RHT_ENTRY_PER_BLOCK, arg->saved);
@@ -1281,11 +1281,12 @@ static void rht_save(struct nova_sb_info *sbi,
 		BUG(); // TODO
 	}
 	saved = atomic64_read(&factory_arg.saved);
-	nova_unlock_write_flush(sbi, &recover_meta->refcount_record_num,
+	nova_unlock_write_flush(sbi, &recover_meta->fp2pbn_record_num,
 		cpu_to_le64(saved), true);
 	
 	// flush in batch
-	nova_flush_buffer(sbi->fp2pbn_table, saved * sizeof(struct nova_rht_entry_pm), true);
+	nova_flush_buffer(nova_sbi_blocknr_to_addr(sbi, sbi->fp2pbn_table), 
+					  saved * sizeof(struct nova_rht_entry_pm), true);
 	
 	printk("About %llu entries in hash table saved in NVM.", saved);
 	NOVA_END_TIMING(rht_save_t, save_refcount_time);
@@ -1453,7 +1454,10 @@ void light_dedup_meta_free(struct light_dedup_meta *meta)
 {
 	struct super_block *sb = meta->sblock;
 	struct nova_sb_info *sbi = NOVA_SB(sb);
+	struct nova_revmap_entry *revmap_entry;
+	unsigned long idx;
 	INIT_TIMING(table_free_time);
+	INIT_TIMING(revmap_free_time);
 
 	generic_cache_destroy(&meta->kbuf_cache);
 	nova_fp_strong_ctx_free(&meta->fp_ctx);
@@ -1463,6 +1467,14 @@ void light_dedup_meta_free(struct light_dedup_meta *meta)
 		nova_rht_entry_free, meta->rht_entry_cache, sbi->cpus);
 	kmem_cache_destroy(meta->rht_entry_cache);
 	NOVA_END_TIMING(rht_free_t, table_free_time);
+
+	NOVA_START_TIMING(revmap_free_t, revmap_free_time);
+	xa_for_each(&meta->revmap, idx, revmap_entry) {
+		nova_revmap_entry_free(meta, revmap_entry);
+	}
+	xa_destroy(&meta->revmap);
+	kmem_cache_destroy(meta->revmap_entry_cache);
+	NOVA_END_TIMING(revmap_free_t, revmap_free_time);
 }
 
 int light_dedup_meta_init(struct light_dedup_meta *meta, struct super_block* sb)
@@ -1494,7 +1506,7 @@ int light_dedup_meta_restore(struct light_dedup_meta *meta,
 	INIT_TIMING(normal_recover_fp_table_time);
 
 	ret = light_dedup_meta_alloc(meta, sb,
-		le64_to_cpu(recover_meta->refcount_record_num));
+		le64_to_cpu(recover_meta->fp2pbn_record_num));
 	// if (ret < 0)
 	// 	goto err_out0;
 
@@ -1530,8 +1542,8 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 	rht_save(sbi, recover_meta, &meta->rht);
 
 	// nova_save_entry_allocator(sb, &meta->entry_allocator);
-	// nova_unlock_write_flush(sbi, &recover_meta->saved,
-	// 	NOVA_RECOVER_META_FLAG_COMPLETE, true);
+	nova_unlock_write_flush(sbi, &recover_meta->saved,
+		NOVA_RECOVER_META_FLAG_COMPLETE, true);
 
 	light_dedup_meta_free(meta);
 }

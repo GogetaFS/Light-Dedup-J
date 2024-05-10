@@ -116,11 +116,11 @@ struct light_dedup_recover_meta {
 	u8 __padding[7];
 	// __le64 free_entrynr_list_head;
 	// __le64 free_entrynr_list_tail;
-	__le64 region_num;
-	__le64 last_region_tail;
-	__le64 max_region_num;
-	__le64 last_counter_block_tail_offset;
-	__le64 refcount_record_num;
+	// __le64 region_num;
+	// __le64 last_region_tail;
+	// __le64 max_region_num;
+	// __le64 last_counter_block_tail_offset;
+	__le64 fp2pbn_record_num;
 };
 _Static_assert(sizeof(struct light_dedup_recover_meta) <= PAGE_SIZE, "struct light_dedup_recover_meta too large!");
 

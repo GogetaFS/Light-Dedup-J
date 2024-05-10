@@ -190,6 +190,7 @@ enum timing_category {
 	meta_alloc_t,
 	rht_save_t,
 	rht_free_t,
+	revmap_free_t,
 	save_entry_allocator_t,
 	insert_rht_entry_t,
 	normal_recover_rht_t,

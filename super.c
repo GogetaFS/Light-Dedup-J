@@ -976,9 +976,10 @@ static void nova_put_super(struct super_block *sb)
 
 	// Do not save anymore
 	
-	// light_dedup_meta_save(&sbi->light_dedup_meta);
+	light_dedup_meta_save(&sbi->light_dedup_meta);
 	/* It's unmount time, so unmap the nova memory */
 	//	nova_print_free_lists(sb);
+	nova_print_timing_stats(sb);
 	
 	if (sbi->virt_addr) {
 		nova_save_snapshots(sb);
@@ -987,7 +988,6 @@ static void nova_put_super(struct super_block *sb)
 		/* Save everything before blocknode mapping! */
 		nova_save_blocknode_mappings_to_log(sb);
 		sbi->virt_addr = NULL;
-		xa_destroy(&sbi->light_dedup_meta.revmap);
 	}
 
 	nova_delete_free_lists(sb);

@@ -185,6 +185,7 @@ const char *Timingstring[TIMING_NUM] = {
 	"meta_alloc",
 	"rht_save",
 	"rht_free",
+	"revmap_free",
 	"save_entry_allocator",
 	"insert_rht_entry",
 	"normal_recover_rht",

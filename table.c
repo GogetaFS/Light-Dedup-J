@@ -263,13 +263,6 @@ static int rewrite_block(
 }
 #endif
 
-static void assign_entry(
-	struct nova_rht_entry *entry,
-	struct nova_fp fp)
-{
-	entry->fp = fp;
-}
-
 static int handle_new_block(
 	struct light_dedup_meta *meta,
 	struct nova_write_para_normal *wp,
@@ -619,8 +612,7 @@ long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 	return retval < 0 ? retval : wp.base.refcount;
 }
 
-int light_dedup_insert_rht_entry(struct light_dedup_meta *meta,
-	struct nova_fp fp, struct nova_pmm_entry *pentry)
+int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_entry_pm *pentry)
 {
 	struct nova_rht_entry *entry = rht_entry_alloc(meta);
 	int ret;
@@ -628,8 +620,12 @@ int light_dedup_insert_rht_entry(struct light_dedup_meta *meta,
 
 	if (entry == NULL)
 		return -ENOMEM;
+	
 	NOVA_START_TIMING(insert_rht_entry_t, insert_entry_time);
-	assign_entry(entry, fp);
+	entry->blocknr = pentry->blocknr;
+	entry->fp = pentry->fp;
+	atomic64_set(&entry->refcount, pentry->refcount);
+
 	while (1) {
 		ret = rhashtable_insert_fast(&meta->rht, &entry->node,
 			nova_rht_params);
@@ -637,13 +633,47 @@ int light_dedup_insert_rht_entry(struct light_dedup_meta *meta,
 			break;
 		schedule();
 	};
+
 	if (ret < 0) {
 		printk("%s: rhashtable_insert_fast returns %d\n",
 			__func__, ret);
 		nova_rht_entry_free(entry, meta->rht_entry_cache);
 	}
+
 	NOVA_END_TIMING(insert_rht_entry_t, insert_entry_time);
 	return ret;
+}
+
+// please hold the rcu look outside
+int light_dedup_lookup_rht_entry(struct light_dedup_meta *meta, struct nova_rht_entry_pm *pentry)
+{
+	struct rhashtable *rht = &meta->rht;
+	struct nova_rht_entry *entry;
+	int ret;
+	INIT_TIMING(lookup_entry_time);
+
+	NOVA_START_TIMING(index_lookup_t, lookup_entry_time);
+	entry = rhashtable_lookup(rht, &pentry->fp, nova_rht_params);
+	NOVA_END_TIMING(index_lookup_t, lookup_entry_time);
+	
+	return entry;
+}
+
+int light_dedup_insert_revmap_entry(struct light_dedup_meta *meta,
+	struct nova_rht_entry_pm *pentry)
+{
+	struct nova_revmap_entry *rev_entry = revmap_entry_alloc(meta);
+	if (rev_entry == NULL)
+		return -ENOMEM;
+	
+	rev_entry->blocknr = pentry->blocknr;
+	rev_entry->fp = pentry->fp;
+	
+	spin_lock(&meta->revmap_lock);
+	nova_insert_revmap_entry(meta, rev_entry);
+	spin_unlock(&meta->revmap_lock);
+
+	return 0;
 }
 
 static inline void incr_stream_trust_degree(
@@ -1292,87 +1322,87 @@ static void rht_save(struct nova_sb_info *sbi,
 	NOVA_END_TIMING(rht_save_t, save_refcount_time);
 }
 
-// struct rht_recover_para {
-// 	struct light_dedup_meta *meta;
-// 	entrynr_t entry_start, entry_end;
-// };
-// static int __rht_recover_func(struct light_dedup_meta *meta,
-// 	entrynr_t entry_start, entrynr_t entry_end)
-// {
-// 	struct super_block *sb = meta->sblock;
-// 	struct nova_sb_info *sbi = NOVA_SB(sb);
-// 	struct nova_entry_refcount_record *rec = nova_sbi_blocknr_to_addr(
-// 		sbi, sbi->entry_refcount_record_start);
-// 	struct nova_pmm_entry *pentry;
-// 	entrynr_t i;
-// 	int ret = 0;
-// 	// printk("entry_start = %lu, entry_end = %lu\n", (unsigned long)entry_start, (unsigned long)entry_end);
-// 	for (i = entry_start; i < entry_end; ++i) {
-// 		if (rec[i].entry_offset == 0)
-// 			continue;
-// 		pentry = (struct nova_pmm_entry *)nova_sbi_get_block(sbi,
-// 			le64_to_cpu(rec[i].entry_offset));
-// 		BUG_ON(nova_pmm_entry_is_free(pentry));
-// 		ret = light_dedup_insert_rht_entry(meta, pentry->fp,
-// 			pentry);
-// 		if (ret < 0)
-// 			break;
-// 	}
-// 	return ret;
-// }
-// static int rht_recover_func(void *__para)
-// {
-// 	struct rht_recover_para *para = (struct rht_recover_para *)__para;
-// 	return __rht_recover_func(para->meta, para->entry_start,
-// 		para->entry_end);
-// }
-// static int rht_recover(struct light_dedup_meta *meta, struct nova_sb_info *sbi,
-// 	struct nova_recover_meta *recover_meta)
-// {
-// 	entrynr_t n = le64_to_cpu(recover_meta->refcount_record_num);
-// 	unsigned long entry_per_thread_max =
-// 		max_ul(1UL << 10, (n + sbi->cpus - 1) / sbi->cpus);
-// 	unsigned long thread_num =
-// 		(n + entry_per_thread_max - 1) / entry_per_thread_max;
-// 	unsigned long i;
-// 	unsigned long base;
-// 	struct rht_recover_para *para;
-// 	struct joinable_kthread *ts;
-// 	int ret = 0;
+struct rht_recover_para {
+	struct light_dedup_meta *meta;
+	entrynr_t entry_start, entry_end;
+};
 
-// 	nova_info("About %lu hash table entries found.\n", (unsigned long)n);
-// 	if (n == 0)
-// 		return 0;
-// 	nova_info("Recover fingerprint table using %lu thread(s)\n", thread_num);
-// 	if (thread_num == 1)
-// 		return __rht_recover_func(meta, 0, n);
-// 	para = kmalloc(thread_num * sizeof(para[0]), GFP_KERNEL);
-// 	if (para == NULL) {
-// 		ret = -ENOMEM;
-// 		goto out0;
-// 	}
-// 	ts = kmalloc(thread_num * sizeof(ts[0]), GFP_KERNEL);
-// 	if (ts == NULL) {
-// 		ret = -ENOMEM;
-// 		goto out1;
-// 	}
-// 	base = 0;
-// 	for (i = 0; i < thread_num; ++i) {
-// 		para[i].meta = meta;
-// 		para[i].entry_start = base;
-// 		base += entry_per_thread_max;
-// 		para[i].entry_end = base < n ? base : n;
-// 		ts[i].threadfn = rht_recover_func;
-// 		ts[i].data = para + i;
-// 	}
-// 	ret = joinable_kthreads_run_join_check_lt_zero(ts, thread_num,
-// 		__func__);
-// 	kfree(ts);
-// out1:
-// 	kfree(para);
-// out0:
-// 	return ret;
-// }
+static int __rht_recover_func(struct light_dedup_meta *meta,
+	entrynr_t entry_start, entrynr_t entry_end)
+{
+	struct super_block *sb = meta->sblock;
+	struct nova_sb_info *sbi = NOVA_SB(sb);
+	struct nova_rht_entry_pm *rec = nova_sbi_blocknr_to_addr(
+		sbi, sbi->fp2pbn_table);
+	// struct nova_pmm_entry *pentry;
+	entrynr_t i;
+	int ret = 0;
+	// printk("entry_start = %lu, entry_end = %lu\n", (unsigned long)entry_start, (unsigned long)entry_end);
+	for (i = entry_start; i < entry_end; ++i) {
+		ret = light_dedup_insert_rht_entry(meta, &rec[i]);
+		if (ret < 0)
+			break;
+		ret = light_dedup_insert_revmap_entry(meta, &rec[i]);
+		if (ret < 0)
+			break;
+	}
+	return ret;
+}
+
+static int rht_recover_func(void *__para)
+{
+	struct rht_recover_para *para = (struct rht_recover_para *)__para;
+	return __rht_recover_func(para->meta, para->entry_start,
+		para->entry_end);
+}
+
+static int rht_recover(struct light_dedup_meta *meta, struct nova_sb_info *sbi,
+					   struct light_dedup_recover_meta *recover_meta)
+{
+	entrynr_t n = le64_to_cpu(recover_meta->fp2pbn_record_num);
+	unsigned long entry_per_thread_max =
+		max_ul(1UL << 10, (n + sbi->cpus - 1) / sbi->cpus);
+	unsigned long thread_num =
+		(n + entry_per_thread_max - 1) / entry_per_thread_max;
+	unsigned long i;
+	unsigned long base;
+	struct rht_recover_para *para;
+	struct joinable_kthread *ts;
+	int ret = 0;
+
+	nova_info("About %lu hash table entries found.\n", (unsigned long)n);
+	if (n == 0)
+		return 0;
+	nova_info("Recover fingerprint table using %lu thread(s)\n", thread_num);
+	if (thread_num == 1)
+		return __rht_recover_func(meta, 0, n);
+	para = kmalloc(thread_num * sizeof(para[0]), GFP_KERNEL);
+	if (para == NULL) {
+		ret = -ENOMEM;
+		goto out0;
+	}
+	ts = kmalloc(thread_num * sizeof(ts[0]), GFP_KERNEL);
+	if (ts == NULL) {
+		ret = -ENOMEM;
+		goto out1;
+	}
+	base = 0;
+	for (i = 0; i < thread_num; ++i) {
+		para[i].meta = meta;
+		para[i].entry_start = base;
+		base += entry_per_thread_max;
+		para[i].entry_end = base < n ? base : n;
+		ts[i].threadfn = rht_recover_func;
+		ts[i].data = para + i;
+	}
+	ret = joinable_kthreads_run_join_check_lt_zero(ts, thread_num,
+		__func__);
+	kfree(ts);
+out1:
+	kfree(para);
+out0:
+	return ret;
+}
 
 static struct llist_node *allocate_kbuf(gfp_t flags)
 {
@@ -1507,27 +1537,21 @@ int light_dedup_meta_restore(struct light_dedup_meta *meta,
 
 	ret = light_dedup_meta_alloc(meta, sb,
 		le64_to_cpu(recover_meta->fp2pbn_record_num));
-	// if (ret < 0)
-	// 	goto err_out0;
+	if (ret < 0)
+		goto err_out0;
 
 	// TODO: use scanning file entry result for recovery
+	NOVA_START_TIMING(normal_recover_rht_t, normal_recover_fp_table_time);
+	ret = rht_recover(meta, sbi, recover_meta);
+	NOVA_END_TIMING(normal_recover_rht_t, normal_recover_fp_table_time);
+
+	if (ret < 0)
+		goto err_out1;
+	return 0;
 	
-	// 	ret = nova_entry_allocator_recover(sbi, &meta->entry_allocator);
-	// 	if (ret < 0)
-	// 		goto err_out1;
-
-	// 	NOVA_START_TIMING(normal_recover_rht_t, normal_recover_fp_table_time);
-	// 	ret = rht_recover(meta, sbi, recover_meta);
-	// 	NOVA_END_TIMING(normal_recover_rht_t, normal_recover_fp_table_time);
-
-	// 	if (ret < 0)
-	// 		goto err_out2;
-	// 	return 0;
-	// err_out2:
-	// 	nova_free_entry_allocator(&meta->entry_allocator);
-	// err_out1:
-	// 	light_dedup_meta_free(meta);
-	// err_out0:
+err_out1:
+	light_dedup_meta_free(meta);
+err_out0:
 	return ret;
 }
 

@@ -115,9 +115,12 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 	unsigned long blocknr);
 
+int light_dedup_lookup_rht_entry(struct light_dedup_meta *meta, 
+	struct nova_rht_entry_pm *pentry);
 int light_dedup_insert_rht_entry(struct light_dedup_meta *meta,
-	struct nova_fp fp, struct nova_pmm_entry *pentry);
-
+	struct nova_rht_entry_pm *pentry);
+int light_dedup_insert_revmap_entry(struct light_dedup_meta *meta,
+	struct nova_rht_entry_pm *pentry);
 int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 	struct nova_write_para_continuous *wp);
 

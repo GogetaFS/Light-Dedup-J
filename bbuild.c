@@ -957,7 +957,9 @@ static int nova_set_file_bm(struct super_block *sb,
 {
 	struct light_dedup_meta *meta = info->light_dedup_meta;
 	struct nova_file_write_entry *entry;
-	struct nova_fp *extent_table = NOVA_SB(sb)->extent_table, fp;
+	struct nova_fp *extent_table = nova_sbi_blocknr_to_addr(NOVA_SB(sb), 
+								   NOVA_SB(sb)->extent_table);
+	struct nova_fp fp;
 	unsigned long nvmm, pgoff, i;
 	int ret;
 

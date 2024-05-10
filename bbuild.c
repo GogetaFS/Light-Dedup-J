@@ -780,7 +780,7 @@ static int upsert_blocknr(struct nova_fp fp, unsigned long blocknr, struct failu
 
 	if (pentry) {
 		refcount = atomic64_add_return(1, &pentry->refcount);
-	} else {	
+	} else {
 		ret = light_dedup_insert_rht_entry(meta, &fake_pentry);
 		if (ret < 0)
 			return ret;
@@ -959,7 +959,7 @@ static int nova_set_file_bm(struct super_block *sb,
 	struct nova_file_write_entry *entry;
 	struct nova_fp *extent_table = nova_sbi_blocknr_to_addr(NOVA_SB(sb), 
 								   NOVA_SB(sb)->extent_table);
-	struct nova_fp fp;
+	struct nova_fp fp = {0};
 	unsigned long nvmm, pgoff, i;
 	int ret;
 
@@ -978,7 +978,11 @@ static int nova_set_file_bm(struct super_block *sb,
 					upsert_blocknr(fp, i, info);
 				}
 			} else {
-				upsert_blocknr(entry->fp, nvmm, info);
+				// in case this is a collisioned block
+				if (entry->fp.value != 0)
+					upsert_blocknr(entry->fp, nvmm, info);
+				else
+					nova_warn("collisioned entry found, skip...\n");
 			}
 		}
 	}

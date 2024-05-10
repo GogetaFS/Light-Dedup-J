@@ -645,11 +645,10 @@ int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_
 }
 
 // please hold the rcu look outside
-int light_dedup_lookup_rht_entry(struct light_dedup_meta *meta, struct nova_rht_entry_pm *pentry)
+struct nova_rht_entry *light_dedup_lookup_rht_entry(struct light_dedup_meta *meta, struct nova_rht_entry_pm *pentry)
 {
 	struct rhashtable *rht = &meta->rht;
-	struct nova_rht_entry *entry;
-	int ret;
+	struct nova_rht_entry *entry = NULL;
 	INIT_TIMING(lookup_entry_time);
 
 	NOVA_START_TIMING(index_lookup_t, lookup_entry_time);
@@ -662,7 +661,16 @@ int light_dedup_lookup_rht_entry(struct light_dedup_meta *meta, struct nova_rht_
 int light_dedup_insert_revmap_entry(struct light_dedup_meta *meta,
 	struct nova_rht_entry_pm *pentry)
 {
-	struct nova_revmap_entry *rev_entry = revmap_entry_alloc(meta);
+	struct nova_revmap_entry *rev_entry;
+	
+	rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
+	if (rev_entry) {
+		// nova_info("%s: Block %lu already exists in revmap\n", __func__, pentry->blocknr);
+		BUG_ON(1);
+		return 0;
+	}
+	
+	rev_entry = revmap_entry_alloc(meta);
 	if (rev_entry == NULL)
 		return -ENOMEM;
 	
@@ -1334,15 +1342,21 @@ static int __rht_recover_func(struct light_dedup_meta *meta,
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct nova_rht_entry_pm *rec = nova_sbi_blocknr_to_addr(
 		sbi, sbi->fp2pbn_table);
-	// struct nova_pmm_entry *pentry;
+	struct nova_rht_entry_pm *pentry;
 	entrynr_t i;
 	int ret = 0;
 	// printk("entry_start = %lu, entry_end = %lu\n", (unsigned long)entry_start, (unsigned long)entry_end);
 	for (i = entry_start; i < entry_end; ++i) {
-		ret = light_dedup_insert_rht_entry(meta, &rec[i]);
+		pentry = &rec[i];
+		if (pentry->blocknr == 0) {
+			continue;
+		}
+		// nova_info("Recover fingerprint table entry %lu: blocknr = %lu, fp = %llu, refcount = %llu\n",
+		// 	(unsigned long)i, pentry->blocknr, pentry->fp, pentry->refcount);
+		ret = light_dedup_insert_rht_entry(meta, pentry);
 		if (ret < 0)
 			break;
-		ret = light_dedup_insert_revmap_entry(meta, &rec[i]);
+		ret = light_dedup_insert_revmap_entry(meta, pentry);
 		if (ret < 0)
 			break;
 	}

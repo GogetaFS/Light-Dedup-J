@@ -14,6 +14,7 @@
 #include <linux/types.h>
 #include <linux/xxhash.h>
 #include "stats.h"
+#include "wyhash.h"
 
 struct nova_fp_strong_ctx {};
 
@@ -25,7 +26,10 @@ struct nova_fp {
 };
 
 union xxh64ret {
-	u32 index;
+	struct {
+		u32 high;
+		u32 low;
+	};
 	u64 value;
 };
 
@@ -43,8 +47,9 @@ static inline int nova_fp_calc(struct nova_fp_strong_ctx *fp_ctx, const void *ad
 	union xxh64ret ret;
 	INIT_TIMING(fp_calc_time);
 	NOVA_START_TIMING(fp_calc_t, fp_calc_time);
-	ret.value = xxh64((const char *)addr, 4096, 0);
-	fp->index = ret.index;
+	// ret.value = xxh64((const char *)addr, 4096, 0);
+	ret.value = wyhash((const char *)addr, 4096, 0, _wyp);
+	fp->index = ret.low;
 	NOVA_END_TIMING(fp_calc_t, fp_calc_time);
 	return 0;
 }

@@ -386,11 +386,11 @@ static bool cmp_content(struct super_block *sb, unsigned long blocknr, const voi
 	}
 	NOVA_END_TIMING(memcmp_t, memcmp_time);
 	if (res) {
-		printk("Block [%lu, %lu) is not equal to the incoming block.\n", blocknr, blocknr + size / 4096);
-		print(content);
-		printk("\n");
-		print(addr);
-		printk("\n");
+		nova_dbg("Block [%lu, %lu) is not equal to the incoming block.\n", blocknr, blocknr + size / 4096);
+		// print(content);
+		// printk("\n");
+		// print(addr);
+		// printk("\n");
 	}
 	return res;
 }
@@ -447,7 +447,8 @@ retry:
 		// 	*(uint64_t *)addr, entry->fp_strong.u64s[0], entry->fp_strong.u64s[1], entry->fp_strong.u64s[2], entry->fp_strong.u64s[3]);
 	}
 	
-	wp->blocknr = blocknr;// retrieval block info
+	// retrieval block info
+	// wp->blocknr = blocknr;
 	
 	// nova_memunlock_range(sb, &pentry->refcount,
 	// 	sizeof(pentry->refcount), &irq_flags);

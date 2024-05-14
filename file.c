@@ -744,12 +744,17 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		wp.num = nova_new_data_blocks(env.sb, env.sih, &wp.blocknr,
 			env.pos >> env.sb->s_blocksize_bits, num,
 			ALLOC_NO_INIT, ANY_CPU, ALLOC_FROM_HEAD);
-		// nova_info("wp.num: %lu, wp.blocknr: %lu\n", wp.num, wp.blocknr);
+		nova_dbgv("wp.num: %lu, wp.blocknr: %lu\n", wp.num, wp.blocknr);
 		ret = light_dedup_incr_ref_continuous(sbi, &wp);
 		if (ret < 0)
 			goto err_out2;
-		else if (ret == DEDUP_SUCCESS)
+		else if (ret == DEDUP_SUCCESS) {
+			nova_dbgv("Deduplication success, try to free %lu, %lu\n",
+				wp.blocknr, wp.num);
 			nova_free_data_blocks(env.sb, env.sih, wp.blocknr, wp.num);
+		} else {
+			nova_dbgv("Deduplication failed\n");
+		}
 		ret = advance(&env, wp.num * env.sb->s_blocksize, &wp);
 		if (ret < 0)
 			goto err_out2;

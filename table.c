@@ -849,7 +849,7 @@ static int copy_from_user_incr_ref(struct nova_sb_info *sbi,
 	if (ret < 0)
 		return ret;
 	attach_blocknr(wp, wp->normal.blocknr);
-	return 0;
+	return ret;
 }
 
 static int handle_no_hint(struct nova_sb_info *sbi,

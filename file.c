@@ -575,8 +575,8 @@ static int advance(struct cow_write_env *env, size_t written,
 
 	nova_init_file_write_entry(env->sb, env->sih, &env->entry_data,
 		env->epoch_id, env->pos >> env->sb->s_blocksize_bits, wp->num,
-		wp->blocknr, env->time, file_size);
-
+		wp->ret_blocknr, env->time, file_size);
+	nova_dbgv("Init entry with blocknr %llu, num %llu @ pgoff %llu\n", wp->ret_blocknr, wp->num, env->pos >> env->sb->s_blocksize_bits);
 	// incorporate fp into file write entry
 	env->entry_data.fp = wp->base.fp;
 
@@ -727,6 +727,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		
 		wp.blocknr = nova_new_data_block(env.sb);
 		wp.num = 1;
+		wp.ret_blocknr = wp.blocknr;
 		ret = light_dedup_incr_ref(meta, &wp);
 		if (ret < 0)
 			goto err_out2;
@@ -744,6 +745,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		wp.num = nova_new_data_blocks(env.sb, env.sih, &wp.blocknr,
 			env.pos >> env.sb->s_blocksize_bits, num,
 			ALLOC_NO_INIT, ANY_CPU, ALLOC_FROM_HEAD);
+		wp.ret_blocknr = wp.blocknr;
 		nova_dbgv("wp.num: %lu, wp.blocknr: %lu\n", wp.num, wp.blocknr);
 		ret = light_dedup_incr_ref_continuous(sbi, &wp);
 		if (ret < 0)
@@ -785,6 +787,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 
 		wp.blocknr = nova_new_data_block(env.sb);
 		wp.num = 1;
+		wp.ret_blocknr = wp.blocknr;
 		ret = light_dedup_incr_ref(meta, &wp);
 		if (ret < 0)
 			goto err_out2;

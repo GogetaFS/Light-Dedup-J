@@ -333,6 +333,8 @@ static int handle_new_block(
 	nova_insert_revmap_entry(meta, rev_entry);
 	spin_unlock(&meta->revmap_lock);
 	
+	nova_dbgv("insert revmap entry %lu %llu\n", wp->blocknr, fp);
+	
 	NOVA_START_TIMING(index_insert_new_entry_t,
 		index_insert_new_entry_time);
 	ret = rhashtable_lookup_insert_key(&meta->rht, &fp, &pentry->node,
@@ -343,6 +345,7 @@ static int handle_new_block(
 			"with error code %d\n", wp->blocknr, fp.value, ret);
 		goto fail1;
 	}
+	nova_dbgv("insert fp entry %llu\n", fp);
 
 	refcount = atomic64_cmpxchg(&pentry->refcount, 0, 1);
 	BUG_ON(refcount != 0);
@@ -450,6 +453,8 @@ retry:
 	// retrieval block info
 	// wp->blocknr = blocknr;
 	
+	wp->ret_blocknr = blocknr;
+
 	// nova_memunlock_range(sb, &pentry->refcount,
 	// 	sizeof(pentry->refcount), &irq_flags);
 	
@@ -464,7 +469,7 @@ retry:
 	// new_dirty_fpentry(wp->last_ref_entries, pentry);
 	wp->last_accessed = pentry;
 	// printk("Block %lu (fpentry %p) has refcount %lld now\n",
-	// 	wp->blocknr, pentry, wp->base.refcount);
+	// 	blocknr, pentry, wp->base.refcount);
 	return DEDUP_SUCCESS;
 }
 
@@ -551,9 +556,17 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr)
 	int64_t refcount;
 	
 	BUG_ON(blocknr == 0);
-
+	nova_dbgv("Decrement refcount of block %lu\n", blocknr);
 	spin_lock(&meta->revmap_lock);
 	rev_entry = nova_search_revmap_entry(meta, blocknr);
+	if (unlikely(!rev_entry)) {
+		// find the valid blocknr left from `blocknr`
+		for (blocknr = blocknr - 1; blocknr > 0; --blocknr) {
+			rev_entry = nova_search_revmap_entry(meta, blocknr);
+			if (rev_entry)
+				break;
+		}
+	}
 	spin_unlock(&meta->revmap_lock);
 
 	rcu_read_lock();
@@ -566,7 +579,7 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr)
 	if (!pentry) {
 		rcu_read_unlock();
 		// Collision happened. Just free it.
-		printk("Fingerprint %ld can not be found in the hash table.", rev_entry->fp);
+		printk("Fingerprint %llu can not be found in the hash table.", rev_entry->fp);
 		BUG_ON(1);
 	}
 	
@@ -861,7 +874,7 @@ static int handle_no_hint(struct nova_sb_info *sbi,
 		return ret;
 	NOVA_STATS_ADD(no_hint, 1);
 	if (unlikely(wp->last_accessed == NULL))
-		return 0;
+		return ret;
 
 	addr = wp->last_accessed;
 
@@ -1125,6 +1138,7 @@ static int handle_hint(struct nova_sb_info *sbi,
 		NOVA_STATS_ADD(predict_hit, 1);
 		incr_trust_degree(sbi, next_hint, addr, trust_degree);
 		incr_stream_trust_degree(wp);
+		wp->ret_blocknr = speculative_pentry->blocknr;
 		return DEDUP_SUCCESS;
 	}
 
@@ -1136,7 +1150,7 @@ static int handle_hint(struct nova_sb_info *sbi,
 		return ret;
 
 	if (unlikely(wp->last_accessed == NULL))
-		return 0;
+		return ret;
 
 	decr_trust_degree(sbi, next_hint, addr,
 					  wp->last_accessed,

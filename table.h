@@ -87,6 +87,7 @@ struct nova_write_para_continuous {
 
 	size_t len;
 	unsigned long blocknr;
+	unsigned long ret_blocknr;
 	unsigned long num;
 	unsigned long blocknr_next;
 	// To keep track of last_ref_entry

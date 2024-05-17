@@ -458,7 +458,7 @@ static int nova_append_log_entry(struct super_block *sb,
 	entry_info->curr_p = curr_p;
 
 	if (type == FILE_WRITE)
-		nova_assign_write_entry(sb, sih, entry, entry, 0);
+		nova_assign_write_entry(sb, sih, entry, entry, true);
 	return 0;
 }
 

@@ -26,7 +26,7 @@ struct nova_rht_entry_pm {
 
 #define RHT_ENTRY_PER_BLOCK (PAGE_SIZE / sizeof(struct nova_rht_entry_pm))
 
-_Static_assert(sizeof(struct nova_rht_entry_pm) == 20, "sizeof struct nova_rht_entry_pm != 20 !!!");
+_Static_assert(sizeof(struct nova_rht_entry_pm) == 24, "sizeof struct nova_rht_entry_pm != 24 !!!");
 _Static_assert(sizeof(unsigned long) == sizeof(void *), "sizeof unsigned long != sizeof void * !!!");
 
 struct nova_write_para_base {

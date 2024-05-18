@@ -543,6 +543,10 @@ void light_dedup_init_entry(struct nova_rht_entry *pentry, struct nova_fp fp, un
 		cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD));
 	// BUG_ON(pentry->blocknr != 0);
 	pentry->blocknr = cpu_to_le64(blocknr);
+	// held by the fp index
+	atomic_set(&pentry->num_holders, 1);
+	nova_dbgv("%s: Block %lu has %d holders now\n",
+		__func__, pentry->blocknr, atomic_read(&pentry->num_holders));
 	// ++allocator_cpu->allocated; // Commit the allocation
 	NOVA_END_TIMING(write_new_entry_t, write_new_entry_time);
 }

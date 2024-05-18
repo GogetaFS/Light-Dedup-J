@@ -186,13 +186,6 @@ static void __rcu_rht_entry_free(struct light_dedup_meta *meta,
 	uint64_t hint = le64_to_cpu(atomic64_read(&pentry->next_hint));
 	u64 addr = hint & HINT_ADDR_MASK;
 	struct nova_rht_entry *next_pentry = (struct nova_rht_entry *)addr;
-	struct nova_revmap_entry *rev_entry;
-
-	spin_lock(&meta->revmap_lock);
-	rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
-	nova_delete_revmap_entry(meta, rev_entry);
-	nova_revmap_entry_free(meta, rev_entry);
-	spin_unlock(&meta->revmap_lock);
 
 	// release block
 	nova_free_data_block(meta->sblock, pentry->blocknr);
@@ -224,12 +217,22 @@ static void free_rht_entry(
 	struct nova_rht_entry *pentry)
 {
 	struct rht_entry_free_task *task;
+	struct nova_revmap_entry *rev_entry;
 	// Remove the entry first to make it invisible to other threads.
 	int ret = rhashtable_remove_fast(&meta->rht, &pentry->node, nova_rht_params);
 	BUG_ON(ret < 0);
+	
 	// printk("Block %lu removed from rhashtable\n",
 	// 	nova_pmm_entry_blocknr(entry->pentry));
 	// nova_pmm_entry_mark_to_be_freed(entry->pentry);
+
+	// NOTE: Do not delay to rcu.
+	spin_lock(&meta->revmap_lock);
+	rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
+	nova_delete_revmap_entry(meta, rev_entry);
+	nova_revmap_entry_free(meta, rev_entry);
+	spin_unlock(&meta->revmap_lock);
+
 	task = kmalloc(sizeof(struct rht_entry_free_task), GFP_ATOMIC);
 	if (task) {
 		task->meta = meta;
@@ -330,9 +333,6 @@ static int handle_new_block(
 
 	rev_entry->blocknr = wp->blocknr;
 	rev_entry->fp = fp;
-	spin_lock(&meta->revmap_lock);
-	nova_insert_revmap_entry(meta, rev_entry);
-	spin_unlock(&meta->revmap_lock);
 	
 	NOVA_START_TIMING(index_insert_new_entry_t,
 		index_insert_new_entry_time);
@@ -342,8 +342,13 @@ static int handle_new_block(
 	if (ret < 0) {
 		printk("Block %lu with fp %llx fail to insert into rhashtable "
 			"with error code %d\n", wp->blocknr, fp.value, ret);
-		goto fail1;
+		goto fail2;
 	}
+
+	// insert revmap unless the entry is inserted into rhashtable
+	spin_lock(&meta->revmap_lock);
+	nova_insert_revmap_entry(meta, rev_entry);
+	spin_unlock(&meta->revmap_lock);
 
 	refcount = atomic64_cmpxchg(&pentry->refcount, 0, 1);
 	BUG_ON(refcount != 0);
@@ -543,6 +548,11 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 	rev_entry = nova_search_revmap_entry(meta, blocknr);
 	spin_unlock(&meta->revmap_lock);
 
+	if (!rev_entry) {
+		nova_warn("Block without deduplication info: %lu\n", blocknr);
+		return;
+	}
+	
 	rcu_read_lock();
 	NOVA_START_TIMING(index_lookup_t, index_lookup_time);
 	pentry = rhashtable_lookup(rht, &rev_entry->fp, nova_rht_params);

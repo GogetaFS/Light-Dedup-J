@@ -1250,7 +1250,7 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 	struct nova_fp *extent_table = nova_sbi_blocknr_to_addr(sbi, sbi->extent_table);
 	list_for_each_entry_safe(node, tmp, &entry_list, list) {
 		// if num == 1, we embed fp into file write entry.
-		if (num > 1) {
+		if (num > 1 && node->last_pentry) {
 			extent_table[node->last_pentry->blocknr] = node->last_pentry->fp;
 			
 			if (flush_start_blocknr == 0) {

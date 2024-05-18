@@ -270,7 +270,7 @@ static int alloc_and_fill_block(
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
 	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
-	memcpy_to_pmem_nocache(xmem, wp->ubuf, 4096);
+	memcpy_to_pmem_nocache(xmem, wp->addr, 4096);
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
 	return NO_DEDUP;
@@ -344,7 +344,8 @@ static int handle_new_block(
 			"with error code %d\n", wp->blocknr, fp.value, ret);
 		goto fail2;
 	}
-
+	nova_dbgv("Block %lu with fp %llx inserted into rhashtable\n",
+		wp->blocknr, fp.value);
 	// insert revmap unless the entry is inserted into rhashtable
 	spin_lock(&meta->revmap_lock);
 	nova_insert_revmap_entry(meta, rev_entry);
@@ -384,9 +385,17 @@ static bool cmp_content(struct super_block *sb, unsigned long blocknr, const voi
 	res = cmp64((const uint64_t *)content, addr);
 	NOVA_END_TIMING(memcmp_t, memcmp_time);
 	// if (res) {
-	// 	print(content);
-	// 	nova_dbgv("\n");
-	// 	print(addr);
+	// 	struct nova_fp fp;
+	// 	// print(content);
+	// 	// nova_dbg("\n");
+	// 	// nova_dbg("\n");
+	// 	// nova_dbg("\n");
+	// 	// nova_dbg("\n");
+	// 	// print(addr);
+	// 	nova_fp_calc(NULL, content, &fp);
+	// 	nova_dbg("content: %llx\n", fp);
+	// 	nova_fp_calc(NULL, addr, &fp);
+	// 	nova_dbg("addr: %llx\n", fp);
 	// }
 	return res;
 }
@@ -423,7 +432,7 @@ retry:
 	}
 	
 	blocknr = pentry->blocknr;
-
+	nova_dbgv("fp:%llx blocknr:%lu\n", wp->base.fp.value, blocknr);
 	BUG_ON(blocknr == 0);
 	if (cmp_content(sb, blocknr, wp->addr)) {
 		rcu_read_unlock();

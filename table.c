@@ -746,15 +746,25 @@ static u64 __update_hint(struct light_dedup_meta *meta, atomic64_t *next_hint, u
 
 	nova_dbgv("%s: next_hint = %llx, old_hint = %llx, new_hint = %llx, hint = %llx\n", __func__, atomic64_read(next_hint), old_hint, new_hint, hint);
 
-	pentry = (struct nova_rht_entry *)(atomic64_read(next_hint) & HINT_ADDR_MASK);
-	BUG_ON(pentry == NULL);
-	incr_holders(pentry);
-	
-	if (old_hint & HINT_ADDR_MASK) {
-		pentry = (struct nova_rht_entry *)(old_hint & HINT_ADDR_MASK);
-		decr_holders(meta, pentry);
+	if ((old_hint & HINT_ADDR_MASK) == (new_hint & HINT_ADDR_MASK)) {
+		// The hinted fpentry is not changed.
+		return hint;
 	}
-	
+
+	if (hint == cpu_to_le64(old_hint)) {
+		// change holder only when exchange successfully
+		// this is to avoid the case that the old hint has 
+		// been changed by others.
+		pentry = (struct nova_rht_entry *)(new_hint & HINT_ADDR_MASK);
+		BUG_ON(pentry == NULL);
+		incr_holders(pentry);
+		
+		if (old_hint & HINT_ADDR_MASK) {
+			pentry = (struct nova_rht_entry *)(old_hint & HINT_ADDR_MASK);
+			decr_holders(meta, pentry);
+		}
+	}
+
 	return hint;
 }
 

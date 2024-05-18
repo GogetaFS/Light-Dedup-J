@@ -136,6 +136,25 @@ static void nova_rht_entry_free(void *entry, void *arg)
 	kmem_cache_free(c, entry);
 }
 
+
+static inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_entry *pentry)
+{
+	if (atomic_dec_and_test(&pentry->num_holders)) {
+		nova_dbgv("Block %lu has no holder now\n", pentry->blocknr);
+		nova_rht_entry_free(pentry, meta->rht_entry_cache);
+		return;
+	}
+	nova_dbgv("%s: Block %lu has %d holders now\n",
+		__func__, pentry->blocknr, atomic_read(&pentry->num_holders));
+}
+
+static inline void incr_holders(struct nova_rht_entry *pentry)
+{
+	atomic_inc(&pentry->num_holders);
+	nova_dbgv("%s: Block %lu has %d holders now\n",
+		__func__, pentry->blocknr, atomic_read(&pentry->num_holders));
+}
+
 // struct pentry_free_task {
 // 	struct rcu_head head;
 // 	struct entry_allocator *allocator;
@@ -166,12 +185,25 @@ static void __rcu_rht_entry_free(struct light_dedup_meta *meta,
 {
 	// struct light_dedup_meta *meta = meta;
 	struct kmem_cache *rht_entry_cache = meta->rht_entry_cache;
-	
+	uint64_t hint = le64_to_cpu(atomic64_read(&pentry->next_hint));
+	u64 addr = hint & HINT_ADDR_MASK;
+	struct nova_rht_entry *next_pentry = (struct nova_rht_entry *)addr;
+	struct nova_revmap_entry *rev_entry;
+
 	spin_lock(&meta->revmap_lock);
-	nova_delete_revmap_entry(meta, nova_search_revmap_entry(meta, pentry->blocknr));
+	rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
+	nova_delete_revmap_entry(meta, rev_entry);
+	nova_revmap_entry_free(meta, rev_entry);
 	spin_unlock(&meta->revmap_lock);
 
-	nova_rht_entry_free(pentry, rht_entry_cache);
+	// release block
+	nova_free_data_block(meta->sblock, pentry->blocknr);
+	if (addr) {
+		// do not hold the next entry
+		decr_holders(meta, next_pentry);
+	}
+	// do not hold the entry itself
+	decr_holders(meta, pentry);
 }
 
 static void rcu_rht_entry_free(struct rcu_head *head)
@@ -713,12 +745,36 @@ static inline bool hint_trustable(uint8_t trust_degree)
 }
 
 // Return the original persistent hint.
-static u64 __update_hint(atomic64_t *next_hint, u64 old_hint, u64 new_hint)
+static u64 __update_hint(struct light_dedup_meta *meta, atomic64_t *next_hint, u64 old_hint, u64 new_hint)
 {
-	return le64_to_cpu(atomic64_cmpxchg_relaxed(
-		next_hint,
-		cpu_to_le64(old_hint),
-		cpu_to_le64(new_hint)));
+	uint64_t hint = le64_to_cpu(atomic64_cmpxchg_relaxed(
+								next_hint,
+								cpu_to_le64(old_hint),
+								cpu_to_le64(new_hint)));
+	struct nova_rht_entry *pentry;
+
+	nova_dbgv("%s: next_hint = %llx, old_hint = %llx, new_hint = %llx, hint = %llx\n", __func__, atomic64_read(next_hint), old_hint, new_hint, hint);
+
+	if ((old_hint & HINT_ADDR_MASK) == (new_hint & HINT_ADDR_MASK)) {
+		// The hinted fpentry is not changed.
+		return hint;
+	}
+
+	if (hint == cpu_to_le64(old_hint)) {
+		// change holder only when exchange successfully
+		// this is to avoid the case that the old hint has 
+		// been changed by others.
+		pentry = (struct nova_rht_entry *)(new_hint & HINT_ADDR_MASK);
+		BUG_ON(pentry == NULL);
+		incr_holders(pentry);
+
+		if (old_hint & HINT_ADDR_MASK) {
+			pentry = (struct nova_rht_entry *)(old_hint & HINT_ADDR_MASK);
+			decr_holders(meta, pentry);
+		}
+	}
+	
+	return hint;
 }
 
 static inline bool trust_degree_out_of_bound(uint8_t trust_degree)
@@ -728,7 +784,7 @@ static inline bool trust_degree_out_of_bound(uint8_t trust_degree)
 
 // Return 0: Successful
 // Return x (!= 0): The offset has been changed, and the new hint is x.
-static u64 __incr_trust_degree(atomic64_t *next_hint, u64 addr_ori,
+static u64 __incr_trust_degree(struct light_dedup_meta *meta, atomic64_t *next_hint, u64 addr_ori,
 	uint8_t trust_degree)
 {
 	__le64 old_hint = cpu_to_le64(addr_ori | trust_degree);
@@ -740,8 +796,9 @@ static u64 __incr_trust_degree(atomic64_t *next_hint, u64 addr_ori,
 			return 0;
 		trust_degree += 1;
 		hint = addr_ori | trust_degree;
-		tmp = atomic64_cmpxchg_relaxed(next_hint, old_hint,
-			cpu_to_le64(hint));
+		tmp = __update_hint(meta, next_hint, old_hint, cpu_to_le64(hint));
+		// tmp = atomic64_cmpxchg_relaxed(next_hint, old_hint,
+		// 	cpu_to_le64(hint));
 		if (tmp == old_hint)
 			return 0;
 		hint = le64_to_cpu(tmp);
@@ -757,7 +814,7 @@ static u64 __incr_trust_degree(atomic64_t *next_hint, u64 addr_ori,
 // Update offset to offset_new if the resulting trust degree is not trustable.
 // Return 0: Successful
 // Return x (!= 0): The offset has been changed, and the new hint is x.
-static u64 __decr_trust_degree(atomic64_t *next_hint, u64 addr_ori,
+static u64 __decr_trust_degree(struct light_dedup_meta *meta, atomic64_t *next_hint, u64 addr_ori,
 	u64 addr_new, uint8_t trust_degree)
 {
 	__le64 old_hint = cpu_to_le64(addr_ori | trust_degree);
@@ -777,8 +834,9 @@ static u64 __decr_trust_degree(atomic64_t *next_hint, u64 addr_ori,
 			hint = addr_ori | trust_degree;
 		}
 
-		tmp = atomic64_cmpxchg_relaxed(next_hint, old_hint,
-			cpu_to_le64(hint));
+		// tmp = atomic64_cmpxchg_relaxed(next_hint, old_hint,
+		// 	cpu_to_le64(hint));
+		tmp = __update_hint(meta, next_hint, old_hint, cpu_to_le64(hint));
 		if (tmp == old_hint)
 			return 0;
 		hint = le64_to_cpu(tmp);
@@ -801,7 +859,7 @@ static u64 incr_trust_degree(struct nova_sb_info *sbi, atomic64_t *next_hint,
 	NOVA_START_TIMING(update_hint_t, update_hint_time);
 	// nova_sbi_memunlock_range(sbi, next_hint, sizeof(*next_hint),
 	// 	&irq_flags);
-	ret = __incr_trust_degree(next_hint, addr_ori, trust_degree);
+	ret = __incr_trust_degree(&sbi->light_dedup_meta, next_hint, addr_ori, trust_degree);
 	// nova_sbi_memlock_range(sbi, next_hint, sizeof(*next_hint), &irq_flags);
 	// nova_flush_cacheline(next_hint, false);
 	NOVA_END_TIMING(update_hint_t, update_hint_time);
@@ -818,7 +876,7 @@ static inline u64 decr_trust_degree(struct nova_sb_info *sbi,
 	NOVA_START_TIMING(update_hint_t, update_hint_time);
 	// nova_sbi_memunlock_range(sbi, next_hint, sizeof(*next_hint),
 	// 	&irq_flags);
-	ret = __decr_trust_degree(next_hint, addr_ori, addr_new,
+	ret = __decr_trust_degree(&sbi->light_dedup_meta, next_hint, addr_ori, addr_new,
 		trust_degree);
 	// nova_sbi_memlock_range(sbi, next_hint, sizeof(*next_hint), &irq_flags);
 	// nova_flush_cacheline(next_hint, false);
@@ -881,12 +939,12 @@ static int handle_no_hint(struct nova_sb_info *sbi,
 	NOVA_START_TIMING(update_hint_t, update_hint_time);
 	// nova_sbi_memunlock_range(sbi, next_hint, sizeof(*next_hint),
 	// 	&irq_flags);
-	hint = __update_hint(next_hint, old_hint,
+	hint = __update_hint(&sbi->light_dedup_meta, next_hint, old_hint,
 		addr | HINT_TRUST_DEGREE_THRESHOLD);
 
 	if ((hint & HINT_ADDR_MASK) == addr) {
 		trust_degree = hint & TRUST_DEGREE_MASK;
-		__incr_trust_degree(next_hint, addr, trust_degree);
+		__incr_trust_degree(&sbi->light_dedup_meta, next_hint, addr, trust_degree);
 	}
 	// nova_sbi_memlock_range(sbi, next_hint, sizeof(*next_hint),
 	// 	&irq_flags);
@@ -997,7 +1055,7 @@ static int check_hint(struct nova_sb_info *sbi,
 	// To make sure that pentry will not be released while we
 	// are reading its content.
 	rcu_read_lock();
-
+	// NOTE: entry will be valid if there is a holder.
 	if (atomic64_read(&speculative_pentry->refcount) == 0) {
 		rcu_read_unlock();
 		nova_warn("Refcount is 0\n");
@@ -1216,86 +1274,96 @@ struct rht_save_factory_arg {
 	struct nova_sb_info *sbi;
 	atomic64_t saved;
 };
-// static void *rht_save_local_arg_factory(void *factory_arg) {
-// 	struct rht_save_factory_arg *arg =
-// 		(struct rht_save_factory_arg *)factory_arg;
-// 	struct nova_sb_info *sbi = arg->sbi;
-// 	struct rht_save_local_arg *local_arg = kmalloc(
-// 		sizeof(struct rht_save_local_arg), GFP_ATOMIC);
-// 	if (local_arg == NULL)
-// 		return ERR_PTR(-ENOMEM);
-// 	local_arg->cur = 0;
-// 	local_arg->end = 0;
-// 	local_arg->rec = nova_sbi_blocknr_to_addr(
-// 		sbi, sbi->entry_refcount_record_start);
-// 	local_arg->saved = &arg->saved;
-// 	local_arg->sbi = sbi;
-// 	local_arg->irq_flags = 0;
-// 	return local_arg;
-// }
-// static void rht_save_local_arg_recycler(void *local_arg)
-// {
-// 	struct rht_save_local_arg *arg =
-// 		(struct rht_save_local_arg *)local_arg;
-// 	memset_nt(arg->rec + arg->cur,
-// 		(arg->end - arg->cur) *
-// 			sizeof(struct nova_entry_refcount_record),
-// 		0);
-// 	kfree(arg);
-// }
-// static void rht_save_worker_init(void *local_arg)
-// {
-// 	struct rht_save_local_arg *arg =
-// 		(struct rht_save_local_arg *)local_arg;
-// 	nova_memunlock(arg->sbi, &arg->irq_flags);
-// }
-// static void rht_save_worker_finish(void *local_arg)
-// {
-// 	struct rht_save_local_arg *arg =
-// 		(struct rht_save_local_arg *)local_arg;
-// 	nova_memlock(arg->sbi, &arg->irq_flags);
-// 	PERSISTENT_BARRIER();
-// }
-// static void rht_save_func(void *ptr, void *local_arg)
-// {
-// 	struct nova_rht_entry *entry = (struct nova_rht_entry *)ptr;
-// 	struct rht_save_local_arg *arg =
-// 		(struct rht_save_local_arg *)local_arg;
-// 	// printk("%s: entry = %p, rec = %p, cur = %lu\n", __func__, entry, arg->rec, arg->cur);
-// 	// TODO: Make it a list
-// 	if (arg->cur == arg->end) {
-// 		arg->end = atomic64_add_return(ENTRY_PER_REGION, arg->saved);
-// 		arg->cur = arg->end - ENTRY_PER_REGION;
-// 		// printk("New region to save, start = %lu, end = %lu\n", arg->cur, arg->end);
-// 	}
-// 	nova_ntstore_val(&arg->rec[arg->cur].entry_offset,
-// 		cpu_to_le64(nova_get_addr_off(arg->sbi, entry->pentry)));
-// 	++arg->cur;
-// }
-// static void rht_save(struct nova_sb_info *sbi,
-// 	struct nova_recover_meta *recover_meta, struct rhashtable *rht)
-// {
-// 	struct rht_save_factory_arg factory_arg;
-// 	uint64_t saved;
-// 	INIT_TIMING(save_refcount_time);
 
-// 	NOVA_START_TIMING(rht_save_t, save_refcount_time);
-// 	atomic64_set(&factory_arg.saved, 0);
-// 	factory_arg.sbi = sbi;
-// 	if (rhashtable_traverse_multithread(
-// 		rht, sbi->cpus, rht_save_func, rht_save_worker_init,
-// 		rht_save_worker_finish, rht_save_local_arg_factory,
-// 		rht_save_local_arg_recycler, &factory_arg) < 0)
-// 	{
-// 		nova_warn("%s: Fail to save the fingerprint table with multithread. Fall back to single thread.", __func__);
-// 		BUG(); // TODO
-// 	}
-// 	saved = atomic64_read(&factory_arg.saved);
-// 	nova_unlock_write_flush(sbi, &recover_meta->refcount_record_num,
-// 		cpu_to_le64(saved), true);
-// 	printk("About %llu entries in hash table saved in NVM.", saved);
-// 	NOVA_END_TIMING(rht_save_t, save_refcount_time);
-// }
+// FIXME: put table here
+static void *rht_save_local_arg_factory(void *factory_arg) {
+	struct rht_save_factory_arg *arg =
+		(struct rht_save_factory_arg *)factory_arg;
+	struct nova_sb_info *sbi = arg->sbi;
+	struct rht_save_local_arg *local_arg = kmalloc(
+		sizeof(struct rht_save_local_arg), GFP_ATOMIC);
+	if (local_arg == NULL)
+		return ERR_PTR(-ENOMEM);
+	local_arg->cur = 0;
+	local_arg->end = 0;
+	local_arg->rec = NULL;
+	local_arg->saved = &arg->saved;
+	local_arg->sbi = sbi;
+	local_arg->irq_flags = 0;
+	return local_arg;
+}
+
+static void rht_save_local_arg_recycler(void *local_arg)
+{
+	struct rht_save_local_arg *arg =
+		(struct rht_save_local_arg *)local_arg;
+	kfree(arg);
+}
+
+static void rht_save_worker_init(void *local_arg)
+{
+	struct rht_save_local_arg *arg =
+		(struct rht_save_local_arg *)local_arg;
+	nova_memunlock(arg->sbi, &arg->irq_flags);
+}
+
+static void rht_save_worker_finish(void *local_arg)
+{
+	struct rht_save_local_arg *arg =
+		(struct rht_save_local_arg *)local_arg;
+	nova_memlock(arg->sbi, &arg->irq_flags);
+	PERSISTENT_BARRIER();
+}
+
+static void rht_save_func(void *ptr, void *local_arg)
+{
+	struct nova_rht_entry *entry = (struct nova_rht_entry *)ptr;
+	struct rht_save_local_arg *arg =
+		(struct rht_save_local_arg *)local_arg;
+	uint64_t hint = le64_to_cpu(atomic64_read(&entry->next_hint));
+	u64 addr = hint & HINT_ADDR_MASK;
+	struct nova_rht_entry *speculative_pentry = (struct nova_rht_entry *)addr;
+
+	// printk("%s: entry = %p, rec = %p, cur = %lu\n", __func__, entry, arg->rec, arg->cur);
+	// TODO: Make it a list
+	if (arg->cur == arg->end) {
+		arg->end = atomic64_add_return(ENTRY_PER_REGION, arg->saved);
+		arg->cur = arg->end - ENTRY_PER_REGION;
+		// printk("New region to save, start = %lu, end = %lu\n", arg->cur, arg->end);
+	}
+
+	if (addr != 0) {
+		decr_holders(&arg->sbi->light_dedup_meta, speculative_pentry);
+	}
+	// nova_ntstore_val(&arg->rec[arg->cur].entry_offset,
+	// 	cpu_to_le64(nova_get_addr_off(arg->sbi, entry->pentry)));
+	++arg->cur;
+}
+
+static void rht_save(struct nova_sb_info *sbi,
+	struct nova_recover_meta *recover_meta, struct rhashtable *rht)
+{
+	struct rht_save_factory_arg factory_arg;
+	uint64_t saved;
+	INIT_TIMING(save_refcount_time);
+
+	NOVA_START_TIMING(rht_save_t, save_refcount_time);
+	atomic64_set(&factory_arg.saved, 0);
+	factory_arg.sbi = sbi;
+	if (rhashtable_traverse_multithread(
+		rht, sbi->cpus, rht_save_func, rht_save_worker_init,
+		rht_save_worker_finish, rht_save_local_arg_factory,
+		rht_save_local_arg_recycler, &factory_arg) < 0)
+	{
+		nova_warn("%s: Fail to save the fingerprint table with multithread. Fall back to single thread.", __func__);
+		BUG(); // TODO
+	}
+	saved = atomic64_read(&factory_arg.saved);
+	nova_unlock_write_flush(sbi, &recover_meta->refcount_record_num,
+		cpu_to_le64(saved), true);
+	printk("About %llu entries in hash table saved in NVM.", saved);
+	NOVA_END_TIMING(rht_save_t, save_refcount_time);
+}
 
 // struct rht_recover_para {
 // 	struct light_dedup_meta *meta;
@@ -1459,6 +1527,9 @@ void light_dedup_meta_free(struct light_dedup_meta *meta)
 {
 	struct super_block *sb = meta->sblock;
 	struct nova_sb_info *sbi = NOVA_SB(sb);
+	struct nova_revmap_entry *revmap_entry;
+	unsigned long idx;
+	INIT_TIMING(revmap_free_time);
 	INIT_TIMING(table_free_time);
 
 	generic_cache_destroy(&meta->kbuf_cache);
@@ -1468,6 +1539,13 @@ void light_dedup_meta_free(struct light_dedup_meta *meta)
 	rhashtable_free_and_destroy_multithread(&meta->rht,
 		nova_rht_entry_free, meta->rht_entry_cache, sbi->cpus);
 	kmem_cache_destroy(meta->rht_entry_cache);
+	
+	xa_for_each(&meta->revmap, idx, revmap_entry) {
+		nova_revmap_entry_free(meta, revmap_entry);
+	}
+	xa_destroy(&meta->revmap);
+	kmem_cache_destroy(meta->revmap_entry_cache);
+	
 	NOVA_END_TIMING(rht_free_t, table_free_time);
 }
 
@@ -1534,7 +1612,7 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 	// TODO: we might store several entries of FP to PBN and 
 	// PBN to FP to speedup recovery
 
-	// rht_save(sbi, recover_meta, &meta->rht);
+	rht_save(sbi, recover_meta, &meta->rht);
 	// nova_save_entry_allocator(sb, &meta->entry_allocator);
 	// nova_unlock_write_flush(sbi, &recover_meta->saved,
 	// 	NOVA_RECOVER_META_FLAG_COMPLETE, true);

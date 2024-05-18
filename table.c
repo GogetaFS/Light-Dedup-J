@@ -272,7 +272,7 @@ static int alloc_and_fill_block(
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
 	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
-	memcpy_to_pmem_nocache(xmem, wp->ubuf, 4096);
+	memcpy_to_pmem_nocache(xmem, wp->addr, 4096);
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
 	return 0;

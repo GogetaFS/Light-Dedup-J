@@ -47,8 +47,8 @@ static inline int nova_fp_calc(struct nova_fp_strong_ctx *fp_ctx, const void *ad
 	union xxh64ret ret;
 	INIT_TIMING(fp_calc_time);
 	NOVA_START_TIMING(fp_calc_t, fp_calc_time);
-	// ret.value = xxh64((const char *)addr, 4096, 0);
-	fp->value = wyhash((const char *)addr, 4096, 0, _wyp);
+	fp->value = xxh64((const char *)addr, 4096, 0);
+	// fp->value = wyhash((const char *)addr, 4096, 0, _wyp);
 	NOVA_END_TIMING(fp_calc_t, fp_calc_time);
 	return 0;
 }

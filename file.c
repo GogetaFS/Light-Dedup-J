@@ -741,7 +741,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 	}
 	while (wp.len >= env.sb->s_blocksize) {
-		num = round_up(wp.len, env.sb->s_blocksize) >> env.sb->s_blocksize_bits;
+		num = round_down(wp.len, env.sb->s_blocksize) >> env.sb->s_blocksize_bits;
 		wp.num = nova_new_data_blocks(env.sb, env.sih, &wp.blocknr,
 			env.pos >> env.sb->s_blocksize_bits, num,
 			ALLOC_NO_INIT, ANY_CPU, ALLOC_FROM_HEAD);

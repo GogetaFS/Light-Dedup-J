@@ -1669,7 +1669,7 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct light_dedup_recover_meta *recover_meta = light_dedup_get_recover_meta(sbi);
 	
-	synchronize_rcu();
+	rcu_barrier_tasks();
 	// TODO: we might store several entries of FP to PBN and 
 	// PBN to FP to speedup recovery
 	rht_save(sbi, recover_meta, &meta->rht);
@@ -1678,7 +1678,7 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 	nova_unlock_write_flush(sbi, &recover_meta->saved,
 		NOVA_RECOVER_META_FLAG_COMPLETE, true);
 
-	synchronize_rcu();
+	rcu_barrier_tasks();
 	light_dedup_meta_free(meta);
 }
 

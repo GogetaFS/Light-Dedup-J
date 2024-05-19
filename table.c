@@ -121,6 +121,12 @@ const struct rhashtable_params nova_rht_params = {
 	.obj_cmpfn = nova_rht_key_entry_cmp,
 };
 
+struct rht_entry_free_task {
+	struct rcu_head head;
+	struct light_dedup_meta *meta;
+	struct nova_rht_entry *pentry;
+};
+
 static inline struct nova_rht_entry* rht_entry_alloc(
 	struct light_dedup_meta *meta)
 {
@@ -136,11 +142,28 @@ static void nova_rht_entry_free(void *entry, void *arg)
 	kmem_cache_free(c, entry);
 }
 
+static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
+{
+	struct rht_entry_free_task *task =
+	container_of(head, struct rht_entry_free_task, head);
+	nova_rht_entry_free(task->pentry, task->meta->rht_entry_cache);
+	kfree(task);
+}
+
 static inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_entry *pentry)
 {
 	if (atomic_dec_and_test(&pentry->num_holders)) {
+		struct rht_entry_free_task *task;
 		nova_dbgv("Block %lu has no holder now\n", pentry->blocknr);
-		nova_rht_entry_free(pentry, meta->rht_entry_cache);
+		// nova_rht_entry_free(pentry, meta->rht_entry_cache);
+		task = kmalloc(sizeof(struct rht_entry_free_task), GFP_ATOMIC);
+		if (task) {
+			task->meta = meta;
+			task->pentry = pentry;
+			call_rcu(&task->head, rcu_rht_entry_free_only_entry);
+		} else {
+			BUG_ON(1);
+		}
 		return;
 	}
 	nova_dbgv("%s: Block %lu has %d holders now\n",
@@ -159,12 +182,6 @@ static inline void incr_holders(struct nova_rht_entry *pentry)
 // 	struct entry_allocator *allocator;
 // 	struct nova_pmm_entry *pentry;
 // };
-
-struct rht_entry_free_task {
-	struct rcu_head head;
-	struct light_dedup_meta *meta;
-	struct nova_rht_entry *pentry;
-};
 
 // static void __rcu_pentry_free(struct entry_allocator *allocator,
 // 	struct nova_pmm_entry *pentry)
@@ -187,7 +204,6 @@ static void __rcu_rht_entry_free(struct light_dedup_meta *meta,
 	u64 addr = hint & HINT_ADDR_MASK;
 	struct nova_rht_entry *next_pentry = (struct nova_rht_entry *)addr;
 
-	// release block
 	nova_free_data_block(meta->sblock, pentry->blocknr);
 	if (addr) {
 		// do not hold the next entry
@@ -576,13 +592,13 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 		BUG_ON(1);
 	}
 	
-	NOVA_START_TIMING(decr_ref_t, decr_ref_time);
-	refcount = decr_ref(meta, pentry);
-	NOVA_END_TIMING(decr_ref_t, decr_ref_time);
-
 	// The entry won't be freed by others
 	// because we are referencing it.
 	rcu_read_unlock();
+	
+	NOVA_START_TIMING(decr_ref_t, decr_ref_time);
+	refcount = decr_ref(meta, pentry);
+	NOVA_END_TIMING(decr_ref_t, decr_ref_time);
 	
 	if (refcount != 0) {
 		*last_pentry = pentry;
@@ -1662,6 +1678,7 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct light_dedup_recover_meta *recover_meta = light_dedup_get_recover_meta(sbi);
 	
+	rcu_barrier_tasks();
 	// TODO: we might store several entries of FP to PBN and 
 	// PBN to FP to speedup recovery
 	rht_save(sbi, recover_meta, &meta->rht);
@@ -1670,6 +1687,7 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 	nova_unlock_write_flush(sbi, &recover_meta->saved,
 		NOVA_RECOVER_META_FLAG_COMPLETE, true);
 
+	rcu_barrier_tasks();
 	light_dedup_meta_free(meta);
 }
 

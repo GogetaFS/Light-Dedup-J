@@ -183,12 +183,6 @@ static inline void incr_holders(struct nova_rht_entry *pentry)
 // 	struct nova_pmm_entry *pentry;
 // };
 
-struct rht_entry_free_task {
-	struct rcu_head head;
-	struct light_dedup_meta *meta;
-	struct nova_rht_entry *pentry;
-};
-
 // static void __rcu_pentry_free(struct entry_allocator *allocator,
 // 	struct nova_pmm_entry *pentry)
 // {

@@ -19,6 +19,7 @@
 #define FREE_THRESHOLD (REAL_ENTRY_PER_REGION / 2)
 
 DECLARE_PER_CPU(uint8_t, stream_trust_degree_per_cpu);
+DECLARE_PER_CPU(struct nova_rht_entry *, last_accessed_fpentry_per_cpu);
 
 DEFINE_PER_CPU(struct entry_allocator_cpu, entry_allocator_per_cpu);
 
@@ -26,6 +27,7 @@ DEFINE_PER_CPU(struct entry_allocator_cpu, entry_allocator_per_cpu);
 static void light_dedup_init_hint_stream_per_cpu(struct super_block *sb, int cpu)
 {
 	per_cpu(stream_trust_degree_per_cpu, cpu) = HINT_TRUST_DEGREE_THRESHOLD;
+	per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
 }
 
 void light_dedup_init_hint_stream(struct super_block *sb)

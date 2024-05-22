@@ -1245,11 +1245,11 @@ get_last_accessed(struct nova_write_para_continuous *wp, bool check)
 static int handle_last_accessed_pentry(struct nova_sb_info *sbi,
 	struct nova_write_para_continuous *wp, struct nova_rht_entry *pentry)
 {
-	if (pentry) {
-		return handle_hint(sbi, wp, &pentry->next_hint);
-	} else {
-		return copy_from_user_incr_ref(sbi, wp);
-	}
+	// if (pentry) {
+	// 	return handle_hint(sbi, wp, &pentry->next_hint);
+	// } else {
+	// }
+	return copy_from_user_incr_ref(sbi, wp);
 }
 
 int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,

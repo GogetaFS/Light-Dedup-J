@@ -58,6 +58,7 @@ struct nova_write_para_normal {
 	// __le64 *dirty_map_blocknr_to_pentry;
 	// Last accessed entry to provide hint for the next entry.
 	struct nova_rht_entry *last_accessed;
+	struct nova_rht_entry *first_accessed;
 };
 struct nova_write_para_rewrite {
 	struct nova_write_para_normal normal;
@@ -106,6 +107,9 @@ struct kbuf_obj {
 	struct llist_node node;
 	void *kbuf;
 };
+
+inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_entry *pentry);
+inline void incr_holders(struct nova_rht_entry *pentry);
 
 int light_dedup_srcu_read_lock(void);
 void light_dedup_srcu_read_unlock(int idx);

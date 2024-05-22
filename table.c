@@ -593,6 +593,7 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 
 	if (!rev_entry) {
 		nova_warn("Block without deduplication info: %lu\n", blocknr);
+		nova_free_data_block(sb, blocknr);
 		return;
 	}
 	

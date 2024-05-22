@@ -708,17 +708,17 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	nova_dbgv("%s: inode %lu, offset %lld, count %lu\n",
 			__func__, env.inode->i_ino, env.pos, len);
 
+	idx = light_dedup_srcu_read_lock();
+	// NOTE: prevent access any freed entry in the section
+	// 		 if call_rcu to free happens before read lock, 
+	// 			num_holders = 0, we will not access it
+	// 		 else call_rcu is delayed after read unlock
 	cpu = get_cpu();
 	wp.normal.last_accessed = per_cpu(last_accessed_fpentry_per_cpu, cpu);
 	wp.stream_trust_degree = per_cpu(stream_trust_degree_per_cpu, cpu);
 	put_cpu();
 	wp.prefetched_blocknr[0] = wp.prefetched_blocknr[1] = 0;
 	
-	idx = light_dedup_srcu_read_lock();
-	// NOTE: prevent access any freed entry in the section
-	// 		 if call_rcu to free happens before read lock, 
-	// 			num_holders = 0, we will not access it
-	// 		 else call_rcu is delayed after read unlock
 	if (offset != 0) {
 		bytes = env.sb->s_blocksize - offset;
 		if (bytes > wp.len)
@@ -747,6 +747,10 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 	}
 	while (wp.len >= env.sb->s_blocksize) {
+		if (wp.normal.last_accessed) {
+			if (atomic64_read(&wp.normal.last_accessed->refcount) == 0)
+				wp.normal.last_accessed = NULL;
+		}
 		ret = light_dedup_incr_ref_continuous(sbi, &wp);
 		if (ret < 0)
 			goto err_out2;
@@ -786,16 +790,24 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 	}
 
-	light_dedup_srcu_read_unlock(idx);
 	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[0], false);
 	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[1], false);
 	cpu = get_cpu();
 	// NOTE: prefetch across syscall do not help.
 	// FIXME: how about 100% dedup ratio?
-	per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
+	if (wp.normal.last_accessed != wp.normal.first_accessed) {
+		if (wp.normal.last_accessed)
+			incr_holders(wp.normal.last_accessed);
+		if (wp.normal.first_accessed)
+			decr_holders(meta, wp.normal.first_accessed);
+	}
+	per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp.normal.last_accessed;
+	// per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
 	// per_cpu(last_new_fpentry_per_cpu, cpu) = wp.normal.last_new_entries[0];
 	per_cpu(stream_trust_degree_per_cpu, cpu) = wp.stream_trust_degree;
 	put_cpu();
+	
+	light_dedup_srcu_read_unlock(idx);
 	
 	// if (!in_the_same_cacheline(wp.normal.last_new_entries[0],
 	// 		wp.normal.last_new_entries[1]))

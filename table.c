@@ -61,6 +61,8 @@ struct nova_revmap_entry {
 	struct nova_fp fp;
 };
 
+DECLARE_PER_CPU(struct nova_rht_entry *, last_accessed_fpentry_per_cpu);
+
 DEFINE_STATIC_SRCU(srcu);
 
 int light_dedup_srcu_read_lock(void) {
@@ -162,7 +164,7 @@ static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 	kfree(task);
 }
 
-static inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_entry *pentry)
+inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_entry *pentry)
 {
 	if (atomic_dec_and_test(&pentry->num_holders)) {
 		struct rht_entry_free_task *task;
@@ -184,7 +186,7 @@ static inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_e
 		__func__, pentry->blocknr, atomic_read(&pentry->num_holders));
 }
 
-static inline void incr_holders(struct nova_rht_entry *pentry)
+inline void incr_holders(struct nova_rht_entry *pentry)
 {
 	atomic_inc(&pentry->num_holders);
 	nova_dbgv("%s: Block %lu has %d holders now\n",
@@ -1236,6 +1238,7 @@ static int handle_last_accessed_pentry(struct nova_sb_info *sbi,
 {
 	if (pentry) {
 		nova_dbgv("%s: Block %lu has been accessed before\n", __func__, pentry->blocknr);
+		BUG_ON(atomic64_read(&pentry->refcount) == 0);
 		return handle_hint(sbi, wp, &pentry->next_hint);
 	} else {
 		return copy_from_user_incr_ref(sbi, wp);
@@ -1684,7 +1687,17 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 	struct super_block *sb = meta->sblock;
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct light_dedup_recover_meta *recover_meta = light_dedup_get_recover_meta(sbi);
-	
+	struct nova_rht_entry *pentry;
+	int cpu;
+
+	srcu_barrier(&srcu);
+	for_each_possible_cpu(cpu) {
+		pentry = per_cpu(last_accessed_fpentry_per_cpu, cpu);
+		if (pentry) {
+			decr_holders(meta, pentry);
+		}
+	}
+
 	// TODO: we might store several entries of FP to PBN and 
 	// PBN to FP to speedup recovery
 	srcu_barrier(&srcu);

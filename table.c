@@ -1687,14 +1687,14 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 	
 	// TODO: we might store several entries of FP to PBN and 
 	// PBN to FP to speedup recovery
-	rcu_barrier_tasks();
+	srcu_barrier(&srcu);
 	rht_save(sbi, recover_meta, &meta->rht);
 
 	// nova_save_entry_allocator(sb, &meta->entry_allocator);
 	nova_unlock_write_flush(sbi, &recover_meta->saved,
 		NOVA_RECOVER_META_FLAG_COMPLETE, true);
 
-	rcu_barrier_tasks();
+	srcu_barrier(&srcu);
 	light_dedup_meta_free(meta);
 }
 

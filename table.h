@@ -107,6 +107,9 @@ struct kbuf_obj {
 	void *kbuf;
 };
 
+int light_dedup_srcu_read_lock(void);
+void light_dedup_srcu_read_unlock(int idx);
+
 int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr, const void* __user ubuf,
 	struct nova_write_para_normal *wp);
 

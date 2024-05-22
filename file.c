@@ -628,7 +628,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	struct llist_node *kbuf_node;
 	struct kbuf_obj *kbuf_obj;
 	struct nova_write_para_continuous wp;
-	int cpu;
+	int cpu, idx;
 	unsigned long irq_flags = 0;
 	ssize_t ret;
 	INIT_TIMING(cow_write_time);
@@ -714,6 +714,11 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	put_cpu();
 	wp.prefetched_blocknr[0] = wp.prefetched_blocknr[1] = 0;
 	
+	idx = light_dedup_srcu_read_lock();
+	// NOTE: prevent access any freed entry in the section
+	// 		 if call_rcu to free happens before read lock, 
+	// 			num_holders = 0, we will not access it
+	// 		 else call_rcu is delayed after read unlock
 	if (offset != 0) {
 		bytes = env.sb->s_blocksize - offset;
 		if (bytes > wp.len)
@@ -780,10 +785,14 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		if (ret < 0)
 			goto err_out2;
 	}
+
+	light_dedup_srcu_read_unlock(idx);
 	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[0], false);
 	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[1], false);
 	cpu = get_cpu();
-	per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp.normal.last_accessed;
+	// NOTE: prefetch across syscall do not help.
+	// FIXME: how about 100% dedup ratio?
+	per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
 	// per_cpu(last_new_fpentry_per_cpu, cpu) = wp.normal.last_new_entries[0];
 	per_cpu(stream_trust_degree_per_cpu, cpu) = wp.stream_trust_degree;
 	put_cpu();

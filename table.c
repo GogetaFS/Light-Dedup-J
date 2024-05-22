@@ -61,6 +61,16 @@ struct nova_revmap_entry {
 	struct nova_fp fp;
 };
 
+DEFINE_STATIC_SRCU(srcu);
+
+int light_dedup_srcu_read_lock(void) {
+	return srcu_read_lock(&srcu);
+}
+
+void light_dedup_srcu_read_unlock(int idx) {
+	srcu_read_unlock(&srcu, idx);
+}
+
 static inline struct nova_revmap_entry* revmap_entry_alloc(
 	struct light_dedup_meta *meta)
 {
@@ -146,7 +156,9 @@ static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 {
 	struct rht_entry_free_task *task =
 	container_of(head, struct rht_entry_free_task, head);
-	nova_rht_entry_free(task->pentry, task->meta->rht_entry_cache);
+	// might be added back
+	if (atomic_read(&task->pentry->num_holders) == 0)
+		nova_rht_entry_free(task->pentry, task->meta->rht_entry_cache);
 	kfree(task);
 }
 
@@ -160,7 +172,9 @@ static inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_e
 		if (task) {
 			task->meta = meta;
 			task->pentry = pentry;
-			call_rcu(&task->head, rcu_rht_entry_free_only_entry);
+			// call_rcu(&task->head, rcu_rht_entry_free_only_entry);
+			// Call in sleeping context
+			call_srcu(&srcu, &task->head, rcu_rht_entry_free_only_entry);
 		} else {
 			BUG_ON(1);
 		}
@@ -250,17 +264,18 @@ static void free_rht_entry(
 	nova_revmap_entry_free(meta, rev_entry);
 	spin_unlock(&meta->revmap_lock);
 
-	task = kmalloc(sizeof(struct rht_entry_free_task), GFP_ATOMIC);
-	if (task) {
-		task->meta = meta;
-		task->pentry = pentry;
-		call_rcu(&task->head, rcu_rht_entry_free);
-	} else {
-		BUG_ON(1);
-		// printk(KERN_ERR "%s: Fail to allocate task\n", __func__);
-		// synchronize_rcu();
-		// __rcu_rht_entry_free(&meta->entry_allocator, entry);
-	}
+	// task = kmalloc(sizeof(struct rht_entry_free_task), GFP_ATOMIC);
+	// if (task) {
+	// 	task->meta = meta;
+	// 	task->pentry = pentry;
+	// 	call_rcu(&task->head, rcu_rht_entry_free);
+	// } else {
+	// 	BUG_ON(1);
+	// 	// printk(KERN_ERR "%s: Fail to allocate task\n", __func__);
+	// 	// synchronize_rcu();
+	// 	// __rcu_rht_entry_free(&meta->entry_allocator, entry);
+	// }
+	__rcu_rht_entry_free(meta, pentry);
 }
 
 static void print(const char *addr) {

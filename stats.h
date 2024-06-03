@@ -22,6 +22,7 @@
 #define __STATS_H
 
 #include "config.h"
+#include "nova_def.h"
 
 /* ======================= Timing ========================= */
 enum timing_category {
@@ -260,14 +261,19 @@ typedef struct timespec timing_t;
 // 	"index_lookup_t not disabled!");
 
 #define NOVA_START_TIMING(name, start)	do { 			\
-	if (measure_timing && !NOVA_TIMER_DISABLED(name))	\
+	if (measure_timing && !NOVA_TIMER_DISABLED(name)){	\
+		MEMORY_BARRIER();				\
 		getrawmonotonic(&start);			\
+		MEMORY_BARRIER();				\
+	}							\
 } while (0)
 
 #define NOVA_END_TIMING(name, start)	do { 				\
 	if (measure_timing && !NOVA_TIMER_DISABLED(name)) { 		\
 		INIT_TIMING(end); 					\
+		MEMORY_BARRIER(); 					\
 		getrawmonotonic(&end); 					\
+		MEMORY_BARRIER(); 					\
 		__this_cpu_add(Timingstats_percpu[name], 		\
 			(end.tv_sec - start.tv_sec) * 1000000000 + 	\
 			(end.tv_nsec - start.tv_nsec)); 		\

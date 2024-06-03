@@ -46,7 +46,7 @@ struct nova_write_para_normal {
 	// Maintained here to make sure that the newly allocated entry is
 	// flushed after its hint is written.
 	struct nova_pmm_entry *last_new_entries[2];
-	__le64 *dirty_map_blocknr_to_pentry;
+	// __le64 *dirty_map_blocknr_to_pentry;
 	// Last accessed entry to provide hint for the next entry.
 	struct nova_pmm_entry *last_accessed;
 };
@@ -118,5 +118,10 @@ int light_dedup_meta_init(struct light_dedup_meta *meta,
 int light_dedup_meta_restore(struct light_dedup_meta *meta,
 	struct super_block *sb);
 void light_dedup_meta_save(struct light_dedup_meta *meta);
+
+
+inline void
+light_dedup_assign_pmm_entry_to_blocknr(struct light_dedup_meta *meta,
+	unsigned long blocknr, struct nova_pmm_entry *pentry);
 
 #endif

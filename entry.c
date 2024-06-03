@@ -193,16 +193,19 @@ static int scan_region(struct entry_allocator *allocator, struct xatable *xat,
 		if (nova_pmm_entry_is_free(pentry))
 			continue;
 		// Impossible to conflict
-		++count;
-		ret = xa_err(xatable_store(
-			xat, nova_pmm_entry_blocknr(pentry), pentry, GFP_KERNEL));
-		if (ret < 0)
-			return ret;
+		// ++count;
+		// ret = xa_err(xatable_store(
+		// 	xat, nova_pmm_entry_blocknr(pentry), pentry, GFP_KERNEL));
+		// if (ret < 0)
+		// 	return ret;
 		// atomic64_set(&pentry->refcount, 0);
 		// TODO: A more elegant way
-		*(u64 *)(&pentry->refcount) = 0;
+		// *(u64 *)(&pentry->refcount) = 0;
+		
+		// clear all entries (without persistence)
+		pentry->blocknr = 0;
 	}
-	nova_flush_buffer(region_start, REGION_SIZE, true);
+	// nova_flush_buffer(region_start, REGION_SIZE, true);
 	return count;
 }
 static int __scan_worker(struct nova_sb_info *sbi, struct xatable *xat,
@@ -327,11 +330,14 @@ int nova_scan_entry_table(struct super_block *sb,
 {
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	int ret;
+	// block allocation is valid
 	scan_region_tails(sbi, allocator, bm);
 	scan_valid_entry_count_block_tails(sbi, allocator, bm);
 	ret = entry_allocator_alloc(sbi, allocator);
 	if (ret < 0)
 		return ret;
+	// NOTE: do not trust any entry here, i.e., 
+	// 		 there is no valid entry, we rebuild by scan bm
 	ret = scan_entry_table(sb, allocator, xat);
 	if (ret < 0)
 		goto err_out;
@@ -519,7 +525,7 @@ void nova_write_entry(struct entry_allocator *allocator,
 	unsigned long irq_flags = 0;
 	INIT_TIMING(write_new_entry_time);
 
-	BUG_ON(atomic64_read(&pentry->refcount) != 0);
+	// BUG_ON(atomic64_read(&pentry->refcount) != 0);
 
 	nova_memunlock(sbi, &irq_flags);
 	NOVA_START_TIMING(write_new_entry_t, write_new_entry_time);

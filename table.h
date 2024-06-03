@@ -101,6 +101,7 @@ struct light_dedup_meta {
 	struct kmem_cache *revmap_entry_cache;
 
 	atomic64_t thread_num;
+	atomic64_t mem_used;
 };
 
 struct kbuf_obj {

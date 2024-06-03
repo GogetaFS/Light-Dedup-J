@@ -219,7 +219,12 @@ struct nova_sb_info {
 	// unsigned long deref_table;
 	unsigned long fp2pbn_table;
 	unsigned long extent_table;
+
 	struct light_dedup_meta light_dedup_meta;
+
+	unsigned long swap_area;
+	struct task_struct *swapd_thread;
+	wait_queue_head_t swapd_wait;
 };
 
 static inline struct nova_sb_info *NOVA_SB(struct super_block *sb)

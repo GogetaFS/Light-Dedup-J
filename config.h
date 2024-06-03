@@ -24,6 +24,8 @@ extern int data_csum;
 extern int data_parity;
 extern int dram_struct_csum;
 extern int transition_threshold;
+extern unsigned long dedup_mem_threashold;
+extern unsigned long swap_time_threashold;
 
 #ifdef MEASURE_DRAM_USAGE
 	#define TABLE_KMEM_CACHE_FLAGS SLAB_POISON

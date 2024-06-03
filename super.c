@@ -55,6 +55,8 @@ int data_parity;
 int dram_struct_csum;
 int support_clwb;
 int transition_threshold = 6;
+unsigned long dedup_mem_threashold = 1024L * 1024L * 1024L;
+unsigned long swap_time_threashold = 1000;
 
 module_param(measure_timing, int, 0444);
 MODULE_PARM_DESC(measure_timing, "Timing measurement");
@@ -81,6 +83,12 @@ module_param(transition_threshold, int, 0444);
 MODULE_PARM_DESC(transition_threshold, "If the number of threads that access "
 	"NVM concurrently reaches transition_threshold, then prefetch-next "
 	"will be disabled. Default: 6");
+
+module_param(dedup_mem_threashold, ulong, 0444);
+MODULE_PARM_DESC(dedup_mem_threashold, "The threshold of memory usage for deduplication");
+
+module_param(swap_time_threashold, ulong, 0444);
+MODULE_PARM_DESC(swap_time_threashold, "The threshold of time for swap an entry");
 
 static struct super_operations nova_sops;
 static const struct export_operations nova_export_ops;
@@ -176,6 +184,11 @@ static int nova_get_nvmm_info(struct super_block *sb,
 
 	sbi->extent_table = sbi->block_start;
 	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_fp) - 1) >> PAGE_SHIFT) + 1;
+
+	// for memory regulate
+	sbi->swap_area = sbi->block_start;
+	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_rht_entry) - 1) >> PAGE_SHIFT) + 1;
+
 	// sbi->region_start = sbi->block_start;
 	// sbi->block_start += VALID_ENTRY_COUNTER_PER_BLOCK;
 

@@ -35,7 +35,8 @@ struct nova_rht_entry {
 	// If the resulting trust degree < 0, then the offset is updated.
 	// If the trust degree < 4, then the hint is not taken.
 	atomic64_t next_hint;
-	atomic_t num_holders; 
+	time64_t atime;
+	atomic_t num_holders;
 };
 
 struct nova_pmm_entry {
@@ -56,6 +57,9 @@ _Static_assert(sizeof(atomic64_t) == 8, "atomic64_t not 8B!");
 #define HINT_ADDR_MASK (~TRUST_DEGREE_MASK)
 #define TRUST_DEGREE_MAX ((1 << TRUST_DEGREE_BITS) - 1)
 #define TRUST_DEGREE_MIN 0
+
+#define ACCESS_POS_BITS 3
+#define ACCESS_POS_MASK ((1 << ACCESS_POS_BITS) - 1)
 
 #define REGION_SIZE PAGE_SIZE
 #define ENTRY_PER_REGION (REGION_SIZE / sizeof(struct nova_pmm_entry))

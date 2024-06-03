@@ -226,7 +226,7 @@ static int rewrite_block(
 	return 0;
 }
 #endif
-static void assign_entry(
+static inline void assign_entry(
 	struct nova_rht_entry *entry,
 	struct nova_pmm_entry *pentry,
 	struct nova_fp fp)
@@ -242,13 +242,14 @@ static int handle_new_block(
 	struct super_block *sb = meta->sblock;
 	struct nova_rht_entry *entry;
 	struct nova_fp fp = wp->base.fp;
-	int cpu;
+	int cpu = 0;
 	struct entry_allocator_cpu *allocator_cpu;
 	struct nova_pmm_entry *pentry;
 	int64_t refcount;
 	int ret;
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(index_insert_new_entry_time);
+	INIT_TIMING(time);
 
 	entry = rht_entry_alloc(meta);
 	if (entry == NULL) {
@@ -263,19 +264,24 @@ static int handle_new_block(
 		ret = PTR_ERR(pentry);
 		goto fail1;
 	}
+	NOVA_START_TIMING(handle_new_blk_t, time);
 	ret = get_new_block(sb, wp);
 	if (ret < 0) {
 		nova_alloc_entry_abort(allocator_cpu);
 		put_cpu();
 		goto fail1;
 	}
-	// light_dedup_assign_pmm_entry_to_blocknr(meta, wp->blocknr, pentry);
+	light_dedup_assign_pmm_entry_to_blocknr(meta, wp->blocknr, pentry);
 	
-	// nova_write_entry(&meta->entry_allocator, allocator_cpu, pentry, fp,
-	// 	wp->blocknr);
 	++allocator_cpu->allocated;
-
 	put_cpu(); // Calls barrier() inside
+	NOVA_END_TIMING(handle_new_blk_t, time);
+	
+	pentry->fp = fp;
+	pentry->next_hint.counter = cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD);
+	pentry->blocknr = cpu_to_le64(wp->blocknr);
+	pentry->refcount.counter = 1;
+
 	// Now the pentry won't be allocated by others
 	assign_entry(entry, pentry, fp);
 	NOVA_START_TIMING(index_insert_new_entry_t,
@@ -292,10 +298,7 @@ static int handle_new_block(
 	// nova_memunlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
 	// 	&irq_flags);
 	// refcount = atomic64_cmpxchg(&pentry->refcount, 0, 1);
-	
 	// atomic64_set(&pentry->refcount, 1);
-	// refcount = 0;
-
 	// // nova_memlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
 	// // 	&irq_flags);
 	// BUG_ON(refcount != 0);

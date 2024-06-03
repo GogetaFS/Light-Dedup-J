@@ -182,6 +182,7 @@ enum timing_category {
 	write_new_entry_t,
 	index_lookup_t,
 	index_insert_new_entry_t,
+	handle_new_blk_t,
 	memcmp_t,
 	prefetch_next_stage_1_t,
 	prefetch_next_stage_2_t,
@@ -277,8 +278,8 @@ typedef struct timespec timing_t;
 		__this_cpu_add(Timingstats_percpu[name], 		\
 			(end.tv_sec - start.tv_sec) * 1000000000 + 	\
 			(end.tv_nsec - start.tv_nsec)); 		\
+		__this_cpu_add(Countstats_percpu[name], 1); 			\
 	} 								\
-	__this_cpu_add(Countstats_percpu[name], 1); 			\
 } while (0)
 
 #define NOVA_STATS_ADD(name, value)	do {		\

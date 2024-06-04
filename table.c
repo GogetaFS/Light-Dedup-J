@@ -1919,6 +1919,7 @@ int nova_rht_entry_swapd_init(struct nova_sb_info *sbi)
 		nova_info("Failed to start NOVA entry swapd thread\n");
 		ret = -1;
 	}
-	nova_info("Start NOVA entry swapd thread.\n");
+	
+	nova_info("Start NOVA entry swapd thread with mem threshold %llu and swap time %llu\n", dedup_mem_threashold, swap_time_threashold);
 	return ret;
 }

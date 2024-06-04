@@ -30,5 +30,4 @@ sudo insmod nova.ko measure_timing=$timing swap_time_threashold=$swap_time_threa
 sleep 1
 
 echo mounting...
-sudo mount -t NOVA -o init -o data_cow /dev/pmem0 /mnt/pmem
-#sudo mount -t NOVA -o init /dev/pmem0 /mnt/pmem
+sudo mount -t NOVA -o init -o data_cow /dev/pmem0 /mnt/pmem0

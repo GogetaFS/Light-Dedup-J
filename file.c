@@ -872,6 +872,8 @@ ssize_t nova_cow_file_write(struct file *filp,
 {
 	struct address_space *mapping = filp->f_mapping;
 	struct inode *inode = mapping->host;
+	struct super_block *sb = inode->i_sb;
+	struct nova_sb_info *sbi = NOVA_SB(sb);
 	int ret;
 	INIT_TIMING(time);
 
@@ -884,7 +886,9 @@ ssize_t nova_cow_file_write(struct file *filp,
 	sb_start_write(inode->i_sb);
 	inode_lock(inode);
 
+	down_read(&sbi->swapd_sem);
 	ret = do_nova_cow_file_write(filp, buf, len, ppos);
+	up_read(&sbi->swapd_sem);
 
 	inode_unlock(inode);
 	sb_end_write(inode->i_sb);

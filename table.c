@@ -120,6 +120,7 @@ static int nova_rht_key_entry_cmp(
 {
 	const struct nova_fp *fp = (const struct nova_fp *)arg->key;
 	struct nova_rht_entry *entry = (struct nova_rht_entry *)obj;
+	entry->atime = ktime_get_seconds(); 
 	// printk("%s: %llx, %llx", __func__, fp->value, entry->fp.value);
 	return fp->value != entry->fp.value;
 }
@@ -147,7 +148,7 @@ static inline bool rht_in_pm(struct light_dedup_meta *meta, struct nova_rht_entr
 	return nova_range_pm_check(sbi, entry, sizeof(struct nova_rht_entry));
 }
 
-static inline struct nova_rht_entry* rht_entry_alloc(
+struct nova_rht_entry* rht_entry_alloc(
 	struct light_dedup_meta *meta, unsigned long blocknr)
 {
 	struct nova_rht_entry* entry;
@@ -163,7 +164,7 @@ static inline struct nova_rht_entry* rht_entry_alloc(
 		entry = kmem_cache_zalloc(meta->rht_entry_cache, GFP_ATOMIC);
 		// ensure that we can use the lowest 3 bits of next_hint
 		BUG_ON(((u64)entry & TRUST_DEGREE_MASK) != 0);
-		atomic64_add(&meta->mem_used, sizeof(struct nova_rht_entry));
+		atomic64_add(sizeof(struct nova_rht_entry), &meta->mem_used);
 	}
 	entry->atime = ktime_get_seconds();
 	return entry;
@@ -177,7 +178,7 @@ static void nova_rht_entry_free(void *entry, void *meta)
 	if (rht_in_pm(meta, pentry)) {
 		// do nothing
 	} else {
-		atomic64_sub(&((struct light_dedup_meta *)meta)->mem_used, sizeof(struct nova_rht_entry));
+		atomic64_sub(sizeof(struct nova_rht_entry), &((struct light_dedup_meta *)meta)->mem_used);
 		kmem_cache_free(c, entry);
 	}
 }
@@ -187,32 +188,47 @@ static int nova_rht_entry_promote(struct light_dedup_meta *meta, struct nova_rht
 {
 	NOVA_ASSERT(rht_in_pm(meta, old_pentry));
 	struct nova_rht_entry *new_pentry = rht_entry_alloc(meta, old_pentry->blocknr);
+	INIT_TIMING(time);
 	int ret = 0;
 
 	if (rht_in_pm(meta, new_pentry)) {
 		// do nothing
 		ret = -ENOMEM;
+		goto out;
 	} else {
+		int delta_refcount = 0;
+		NOVA_START_TIMING(entry_promote_t, time);
+		nova_dbgv("Promote entry 0x%llx", old_pentry);
 		memcpy(new_pentry, old_pentry, sizeof(struct nova_rht_entry));
 		// clean holders for this in-mem entry
 		atomic_set(&new_pentry->num_holders, 1);
+
+		// the refcount of the old entry can be changed here before
 		rhashtable_replace_fast(&meta->rht, &old_pentry->node, &new_pentry->node, nova_rht_params);
-		// make this entry invalid
+		
+		// make this old entry invalid
+		// FIXME: what if the old entry is held by others and the refcount is changed?
+		// 		  we miss the change of refcount here and might lead to inconsistency.
+		// this would not happen as we use semaphore to protect
 		atomic64_set(&old_pentry->refcount, 0);
+		NOVA_END_TIMING(entry_promote_t, time);
 	}
 
+out:
 	return ret;
 }
 
-static inline void nova_rht_entry_demote(struct light_dedup_meta *meta, struct nova_rht_entry *old_pentry)
+static inline int nova_rht_entry_demote(struct light_dedup_meta *meta, struct nova_rht_entry *old_pentry)
 {
+	nova_dbgv("Demote entry 0x%llx", old_pentry);
 	NOVA_ASSERT(!rht_in_pm(meta, old_pentry));
-	
 	struct nova_rht_entry *new_pentry;
 	struct nova_sb_info *sbi = light_dedup_meta_to_sbi(meta);
 	struct nova_rht_entry *swap_area;
+	INIT_TIMING(time);
 	int ret = 0;
-	
+
+	NOVA_START_TIMING(entry_demote_t, time);
 	swap_area = nova_sbi_blocknr_to_addr(sbi, sbi->swap_area);
 	new_pentry = &swap_area[old_pentry->blocknr];
 
@@ -221,9 +237,12 @@ static inline void nova_rht_entry_demote(struct light_dedup_meta *meta, struct n
 	atomic_set(&new_pentry->num_holders, 1);
 	
 	rhashtable_replace_fast(&meta->rht, &old_pentry->node, &new_pentry->node, nova_rht_params);
-	// make this entry invalid, which cannot be accessed through any other pointer.
+	// make old entry invalid, which cannot be accessed through any other pointer.
 	atomic64_set(&old_pentry->refcount, 0);
+	// try free the in-mem old entry
 	decr_holders(meta, old_pentry);
+	NOVA_END_TIMING(entry_demote_t, time);
+	return ret;
 }
 
 static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
@@ -1817,6 +1836,7 @@ static int nova_rht_entry_swapd(void *sb)
 	struct rhashtable_iter iter;
 	struct nova_rht_entry *pentry;
 	time64_t cur_time;
+	int idx = 0;
 
 	for(;;) {
 		entry_swapd_try_sleeping(sbi);
@@ -1824,30 +1844,55 @@ static int nova_rht_entry_swapd(void *sb)
 		if (kthread_should_stop())
 			break;
 
-		rcu_read_lock();
+		idx = light_dedup_srcu_read_lock();
 		rhashtable_walk_enter(&meta->rht, &iter);
+
 		rhashtable_walk_start(&iter);
 		while ((pentry = rhashtable_walk_next(&iter)) != NULL) {
 			if (IS_ERR(pentry))
 				continue;
+			// has been deleted
+			if (atomic64_read(&pentry->refcount) == 0)
+				continue;
+			
+			if (kthread_should_stop()) {
+				rhashtable_walk_stop(&iter);
+				break;
+			}
+
 			cur_time = ktime_get_seconds();
 			if (rht_in_pm(meta, pentry)) {
 				if (cur_time - pentry->atime > swap_time_threashold) {
 					// leave me alone 
 				} else {
+					rhashtable_walk_stop(&iter);
+					
+					// ensure all related deduplication exits
+					down_write(&sbi->swapd_sem);
 					nova_rht_entry_promote(meta, pentry);
+					up_write(&sbi->swapd_sem);
+					
+					rhashtable_walk_start(&iter);
 				}
 			} else {
 				if (cur_time - pentry->atime > swap_time_threashold) {
+					rhashtable_walk_stop(&iter);
+
+					// ensure all related deduplication exits
+					down_write(&sbi->swapd_sem);
 					nova_rht_entry_demote(meta, pentry);
+					up_write(&sbi->swapd_sem);
+					
+					rhashtable_walk_start(&iter);
 				} else {
 					// leave me alone
 				}
 			}
 		}
 		rhashtable_walk_stop(&iter);
+		
 		rhashtable_walk_exit(&iter);
-		rcu_read_unlock();
+		light_dedup_srcu_read_unlock(idx);
 	}
 }
 
@@ -1856,7 +1901,7 @@ void wakeup_entry_swapd(struct nova_sb_info *sbi)
 	if (!waitqueue_active(&sbi->swapd_wait))
 		return;
 
-	nova_dbg("Wakeup snapshot cleaner thread\n");
+	nova_dbg("Wakeup entry swapd thread\n");
 	wake_up_interruptible(&sbi->swapd_wait);
 }
 
@@ -1865,6 +1910,8 @@ int nova_rht_entry_swapd_init(struct nova_sb_info *sbi)
 	int ret = 0;
 
 	init_waitqueue_head(&sbi->swapd_wait);
+	
+	init_rwsem(&sbi->swapd_sem);
 
 	sbi->swapd_thread = kthread_run(nova_rht_entry_swapd,
 		sbi->sb, "nova_rht_entry_swapd");

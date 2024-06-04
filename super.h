@@ -225,6 +225,7 @@ struct nova_sb_info {
 	unsigned long swap_area;
 	struct task_struct *swapd_thread;
 	wait_queue_head_t swapd_wait;
+	struct rw_semaphore swapd_sem;
 };
 
 static inline struct nova_sb_info *NOVA_SB(struct super_block *sb)

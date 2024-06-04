@@ -39,6 +39,7 @@
 #include <linux/cred.h>
 #include <linux/list.h>
 #include <linux/dax.h>
+#include <asm/tlbflush.h>
 #include "config.h"
 #include "nova.h"
 #include "journal.h"
@@ -55,8 +56,8 @@ int data_parity;
 int dram_struct_csum;
 int support_clwb;
 int transition_threshold = 6;
-unsigned long dedup_mem_threashold = 1024L * 1024L * 1024L;
-unsigned long swap_time_threashold = 1000;
+unsigned long dedup_mem_threashold = 1024L * 1024L;
+unsigned long swap_time_threashold = 1;
 
 module_param(measure_timing, int, 0444);
 MODULE_PARM_DESC(measure_timing, "Timing measurement");
@@ -865,6 +866,58 @@ setup_sb:
 
 	retval = 0;
 	NOVA_END_TIMING(mount_t, mount_time);
+	
+	// int level;
+	// pte_t *pm_pte = lookup_address(sbi->virt_addr, &level);
+	// BUG_ON(!pm_pte);
+	// unsigned long pm_addr = sbi->phys_addr & page_level_mask(level);
+	// nova_dbg("pm_pte: 0x%llx, level %d\n", pm_pte->pte, level);
+
+	// pte_t *pte = lookup_address(sbi->snapshot_si, &level);
+	// if (pte) {
+	// 	nova_dbg("sbi->snapshot_si is already mapped @ phys 0x%llx with level %d, looked pte 0x%llx\n",
+	// 		pte_pfn(*pte) << PAGE_SHIFT, level, pte->pte);
+		
+	// 	switch (level) {
+	// 	case PG_LEVEL_1G: {
+	// 		pud_t *pud = (pud_t *)pte;
+	// 		pud_t new_pud = { .pud = pm_addr & PUD_MASK };
+	// 		new_pud.pud |= 0x0e3;
+	// 		new_pud.pud |= _PAGE_DEVMAP | _PAGE_SPECIAL;
+	// 		set_pud(pud, new_pud);
+			
+	// 		nova_dbg("1: sbi->snapshot_si is now mapped @ phys 0x%llx\n",
+	// 			pud_pfn(*pud) << PAGE_SHIFT);
+
+	// 		nova_dbg("sbi->snapshot_si->s_magic 0x%x\n",
+	// 		((struct nova_super_block *)sbi->snapshot_si)->s_magic);
+	// 		break;
+	// 	}
+	// 	case PG_LEVEL_2M: {
+	// 		pmd_t *pmd = (pmd_t *)pte;
+	// 		pmd_t new_pmd = { .pmd = pm_addr & PMD_MASK };
+	// 		new_pmd.pmd |= 0x1e3;
+	// 		new_pmd.pmd |= _PAGE_NX;
+
+	// 		set_pmd(pmd, new_pmd);
+
+	// 		nova_dbg("2: sbi->snapshot_si is now mapped @ phys 0x%llx, pmd 0x%llx\n",
+	// 			pmd_pfn(*pmd) << PAGE_SHIFT, pmd->pmd);
+
+	// 		unsigned long sb_addr = round_down((unsigned long)(sbi->snapshot_si), PMD_SIZE);
+
+	// 		asm volatile("invlpg (%0)" ::"r" (sb_addr) : "memory");
+	// 		// print_hex_dump(KERN_INFO, "snapshot_si: ", DUMP_PREFIX_OFFSET, 16, 1, sb_addr, 512, 1);
+	// 		nova_dbg("sb_addr @ 0x%llx, sbi->snapshot_si @ %llx sbi->snapshot_si->s_magic 0x%x\n", sb_addr, (unsigned long)(sbi->snapshot_si), ((struct nova_super_block *)sb_addr)->s_magic);
+	// 		break;
+	// 	}
+	// 	default:
+	// 		break;
+	// 	}
+	// } else {
+	// 	nova_dbg("sbi->snapshot_si is not mapped\n");
+	// }
+
 	return retval;
 
 out:

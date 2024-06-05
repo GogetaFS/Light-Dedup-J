@@ -617,9 +617,13 @@ static void nova_enter_dedup(struct light_dedup_meta *meta, struct nova_write_pa
 	int cpu, ret;
 	int dedup_ctx = -1;
 
-	ret = down_read_trylock(&meta->worker_sem);
+	ret = read_trylock(&meta->worker_lock);
 	if (!ret) {
 		dedup_ctx = light_dedup_srcu_read_lock();
+	} else {
+		atomic64_fetch_add_relaxed(1, &meta->rcu_unprotected_worker_num);
+		// lock is held, now we release it
+		read_unlock(&meta->worker_lock);
 	}
 
 	wp->dedup_ctx = dedup_ctx;
@@ -664,8 +668,8 @@ static void nova_exit_dedup(struct light_dedup_meta *meta, struct nova_write_par
 		// lock is not held
 		light_dedup_srcu_read_unlock(wp->dedup_ctx);
 	} else {
-		// lock is held, now we release it
-		up_read(&meta->worker_sem);
+		// exit the section
+		atomic64_fetch_sub_relaxed(1, &meta->rcu_unprotected_worker_num);
 	}
 }
 

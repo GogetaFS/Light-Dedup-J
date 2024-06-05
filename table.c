@@ -161,9 +161,14 @@ static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 	struct light_dedup_meta *meta = task->meta;
 	// might be added back
 	if (atomic_read(&task->pentry->num_holders) == 0) {
-		down_write(&meta->worker_sem);
+		write_lock(&meta->worker_lock);
+		while(atomic64_read(&meta->rcu_unprotected_worker_num) > 0) {
+			write_unlock(&meta->worker_lock);
+			cpu_relax();
+			write_lock(&meta->worker_lock);
+		}
 		nova_rht_entry_free(task->pentry, meta->rht_entry_cache);
-		up_write(&meta->worker_sem);
+		write_unlock(&meta->worker_lock);
 	}
 	kfree(task);
 }
@@ -308,7 +313,10 @@ static int alloc_and_fill_block(
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
 	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
-	memcpy_to_pmem_nocache(xmem + wp->kofs, wp->ubuf, wp->kbytes);
+	if (wp->kbytes < PAGE_SIZE || wp->kofs != 0) 
+		memcpy_flushcache((char *)xmem, wp->addr, PAGE_SIZE);
+	else
+		memcpy_to_pmem_nocache((char *)xmem, wp->ubuf, PAGE_SIZE);
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
 	return NO_DEDUP;
@@ -1601,9 +1609,9 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 
 	atomic64_set(&meta->thread_num, 0);
 	
-	init_rwsem(&meta->worker_sem);
+	rwlock_init(&meta->worker_lock);
 
-	atomic64_set(&meta->append_num, 0);
+	atomic64_set(&meta->rcu_unprotected_worker_num, 0);
 
 	NOVA_END_TIMING(meta_alloc_t, table_init_time);
 	return 0;

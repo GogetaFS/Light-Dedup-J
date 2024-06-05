@@ -107,8 +107,8 @@ struct light_dedup_meta {
 
 	atomic64_t thread_num;
 	
-	struct rw_semaphore worker_sem;
-	atomic64_t append_num;
+	rwlock_t worker_lock;
+	atomic64_t rcu_unprotected_worker_num;
 };
 
 struct kbuf_obj {

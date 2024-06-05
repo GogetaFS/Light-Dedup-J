@@ -612,6 +612,63 @@ static int advance(struct cow_write_env *env, size_t written,
 	return 0;
 }
 
+static void nova_enter_dedup(struct light_dedup_meta *meta, struct nova_write_para_continuous *wp) 
+{
+	int cpu, ret;
+	int dedup_ctx = -1;
+
+	ret = down_read_trylock(&meta->worker_sem);
+	if (!ret) {
+		dedup_ctx = light_dedup_srcu_read_lock();
+	}
+
+	wp->dedup_ctx = dedup_ctx;
+	
+	// NOTE: prevent access any freed entry in the section
+		// 		 if call_rcu to free happens before read lock, 
+	// 			num_holders = 0, we will not access it
+	// 		 else call_rcu is delayed after read unlock
+	cpu = get_cpu();
+	wp->normal.first_accessed = wp->normal.last_accessed = per_cpu(last_accessed_fpentry_per_cpu, cpu);
+	wp->stream_trust_degree = per_cpu(stream_trust_degree_per_cpu, cpu);
+	put_cpu();
+	wp->prefetched_blocknr[0] = wp->prefetched_blocknr[1] = 0;
+}
+
+static void nova_exit_dedup(struct light_dedup_meta *meta, struct nova_write_para_continuous *wp, bool exception) 
+{
+	bool append = wp->append;
+	unsigned long num_blocks = wp->num_blocks;
+	int cpu;
+
+	if (!exception) {
+		cpu = get_cpu();
+		// NOTE: we can not protect the last_accessed_fpentry_per_cpu by saving expensive 
+		// incr_holders and decr_holders
+		if (append && num_blocks == 1) {
+			per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
+		} else {
+			per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp->normal.last_accessed;
+			if (wp->normal.last_accessed != wp->normal.first_accessed) {
+				if (wp->normal.last_accessed)
+					incr_holders(wp->normal.last_accessed);
+				if (wp->normal.first_accessed)
+					decr_holders(meta, wp->normal.first_accessed);
+			}
+		}
+		per_cpu(stream_trust_degree_per_cpu, cpu) = wp->stream_trust_degree;
+		put_cpu();
+	}
+
+	if (wp->dedup_ctx != -1) {
+		// lock is not held
+		light_dedup_srcu_read_unlock(wp->dedup_ctx);
+	} else {
+		// lock is held, now we release it
+		up_read(&meta->worker_sem);
+	}
+}
+
 /*
  * Perform a COW write.   Must hold the inode lock before calling.
  */
@@ -704,20 +761,16 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	}
 	kbuf_obj = container_of(kbuf_node, struct kbuf_obj, node);
 	wp.kbuf = kbuf_obj->kbuf;
+	if (env.pos == i_size_read(env.inode))
+		wp.append = true;
+	else
+		wp.append = false;
+	wp.num_blocks = num_blocks;
 
 	nova_dbgv("%s: inode %lu, offset %lld, count %lu\n",
 			__func__, env.inode->i_ino, env.pos, len);
 
-	idx = light_dedup_srcu_read_lock();
-	// NOTE: prevent access any freed entry in the section
-	// 		 if call_rcu to free happens before read lock, 
-	// 			num_holders = 0, we will not access it
-	// 		 else call_rcu is delayed after read unlock
-	cpu = get_cpu();
-	wp.normal.first_accessed = wp.normal.last_accessed = per_cpu(last_accessed_fpentry_per_cpu, cpu);
-	wp.stream_trust_degree = per_cpu(stream_trust_degree_per_cpu, cpu);
-	put_cpu();
-	wp.prefetched_blocknr[0] = wp.prefetched_blocknr[1] = 0;
+	nova_enter_dedup(meta, &wp);
 	
 	if (offset != 0) {
 		bytes = env.sb->s_blocksize - offset;
@@ -735,11 +788,13 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 		}
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
-		wp.ubuf += bytes;
-		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, wp.ubuf, &wp.normal);
+
+		ret = light_dedup_incr_ref(meta, offset, bytes, wp.kbuf, wp.ubuf, &wp.normal);
 		if (ret < 0)
 			goto err_out2;
+		
+		wp.ubuf += bytes;
+		wp.len -= bytes;
 		wp.blocknr = wp.normal.blocknr;
 		wp.num = 1;
 		ret = advance(&env, bytes, &wp);
@@ -778,35 +833,23 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 		}
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
-		wp.ubuf += bytes;
-		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, wp.ubuf, &wp.normal);
+		ret = light_dedup_incr_ref(meta, 0, bytes, wp.kbuf, wp.ubuf, &wp.normal);
 		if (ret < 0)
 			goto err_out2;
+		wp.ubuf += bytes;
+		wp.len -= bytes;
 		wp.blocknr = wp.normal.blocknr;
 		wp.num = 1;
 		ret = advance(&env, bytes, &wp);
 		if (ret < 0)
 			goto err_out2;
 	}
-	
 
 	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[0], false);
 	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[1], false);
-	cpu = get_cpu();
-	if (wp.normal.last_accessed != wp.normal.first_accessed) {
-		if (wp.normal.last_accessed)
-			incr_holders(wp.normal.last_accessed);
-		if (wp.normal.first_accessed)
-			decr_holders(meta, wp.normal.first_accessed);
-	}
-	per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp.normal.last_accessed;
-	// per_cpu(last_new_fpentry_per_cpu, cpu) = wp.normal.last_new_entries[0];
-	per_cpu(stream_trust_degree_per_cpu, cpu) = wp.stream_trust_degree;
-	put_cpu();
-
-	light_dedup_srcu_read_unlock(idx);
 	
+	nova_exit_dedup(meta, &wp, false);
+
 	// if (!in_the_same_cacheline(wp.normal.last_new_entries[0],
 	// 		wp.normal.last_new_entries[1]))
 	// 	nova_flush_entry_if_not_null(wp.normal.last_new_entries[1],
@@ -859,6 +902,7 @@ err_out2:
 err_out1:
 	atomic64_fetch_sub_relaxed(1, &meta->thread_num);
 err_out0:
+	nova_exit_dedup(meta, &wp, true);
 	NOVA_END_TIMING(do_cow_write_t, cow_write_time);
 	return ret;
 }

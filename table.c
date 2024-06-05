@@ -158,9 +158,13 @@ static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 {
 	struct rht_entry_free_task *task =
 	container_of(head, struct rht_entry_free_task, head);
+	struct light_dedup_meta *meta = task->meta;
 	// might be added back
-	if (atomic_read(&task->pentry->num_holders) == 0)
-		nova_rht_entry_free(task->pentry, task->meta->rht_entry_cache);
+	if (atomic_read(&task->pentry->num_holders) == 0) {
+		down_write(&meta->worker_sem);
+		nova_rht_entry_free(task->pentry, meta->rht_entry_cache);
+		up_write(&meta->worker_sem);
+	}
 	kfree(task);
 }
 
@@ -304,7 +308,7 @@ static int alloc_and_fill_block(
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
 	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
-	memcpy_to_pmem_nocache(xmem, wp->addr, 4096);
+	memcpy_to_pmem_nocache(xmem + wp->kofs, wp->ubuf, wp->kbytes);
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
 	return NO_DEDUP;
@@ -367,7 +371,11 @@ static int handle_new_block(
 
 	rev_entry->blocknr = wp->blocknr;
 	rev_entry->fp = fp;
-	
+	// insert revmap unless the entry is inserted into rhashtable
+	spin_lock(&meta->revmap_lock);
+	nova_insert_revmap_entry(meta, rev_entry);
+	spin_unlock(&meta->revmap_lock);
+
 	NOVA_START_TIMING(index_insert_new_entry_t,
 		index_insert_new_entry_time);
 	ret = rhashtable_lookup_insert_key(&meta->rht, &fp, &pentry->node,
@@ -376,13 +384,11 @@ static int handle_new_block(
 	if (ret < 0) {
 		printk("Block %lu with fp %llx fail to insert into rhashtable "
 			"with error code %d\n", wp->blocknr, fp.value, ret);
+		spin_lock(&meta->revmap_lock);
+		nova_delete_revmap_entry(meta, rev_entry);
+		spin_unlock(&meta->revmap_lock);
 		goto fail2;
 	}
-
-	// insert revmap unless the entry is inserted into rhashtable
-	spin_lock(&meta->revmap_lock);
-	nova_insert_revmap_entry(meta, rev_entry);
-	spin_unlock(&meta->revmap_lock);
 
 	refcount = atomic64_cmpxchg(&pentry->refcount, 0, 1);
 	BUG_ON(refcount != 0);
@@ -498,7 +504,7 @@ static int incr_ref_normal(struct light_dedup_meta *meta,
 	return incr_ref(meta, wp, alloc_and_fill_block);
 }
 
-static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta,
+static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta, unsigned long kofs, unsigned long kbytes,
 	const void *addr, const void * __user ubuf, struct nova_write_para_normal *wp)
 {
 	int ret;
@@ -506,6 +512,8 @@ static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta,
 
 	NOVA_START_TIMING(incr_ref_t, incr_ref_time);
 	BUG_ON(nova_fp_calc(&meta->fp_ctx, addr, &wp->base.fp));
+	wp->kofs = kofs;
+	wp->kbytes = kbytes;
 	wp->addr = addr;
 	wp->ubuf = ubuf;
 	ret = incr_ref_normal(meta, wp);
@@ -513,12 +521,12 @@ static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta,
 	return ret;
 }
 
-int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr, const void* __user ubuf,
-	struct nova_write_para_normal *wp)
+int light_dedup_incr_ref(struct light_dedup_meta *meta, unsigned long kofs, unsigned long kbytes, 
+						const void* addr, const void* __user ubuf, struct nova_write_para_normal *wp)
 {
 	int ret;
 	while (1) {
-		ret = light_dedup_incr_ref_atomic(meta, addr, ubuf, wp);
+		ret = light_dedup_incr_ref_atomic(meta, kofs, kbytes, addr, ubuf, wp);
 		if (likely(ret != -EAGAIN))
 			break;
 		schedule();
@@ -945,7 +953,7 @@ static int copy_from_user_incr_ref(struct nova_sb_info *sbi,
 	NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
 	if (ret)
 		return -EFAULT;
-	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, wp->kbuf, wp->ubuf,
+	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, 0, PAGE_SIZE, wp->kbuf, wp->ubuf,
 		&wp->normal);
 	if (ret < 0)
 		return ret;
@@ -1592,6 +1600,11 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 	}
 
 	atomic64_set(&meta->thread_num, 0);
+	
+	init_rwsem(&meta->worker_sem);
+
+	atomic64_set(&meta->append_num, 0);
+
 	NOVA_END_TIMING(meta_alloc_t, table_init_time);
 	return 0;
 

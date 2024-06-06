@@ -38,10 +38,11 @@ struct nova_write_para_normal {
 	// Because C does not support inheritance.
 	struct nova_write_para_base base;
 	const void *addr;
+	unsigned long kofs;
+	unsigned long kbytes;
 	const void __user *ubuf;
 	unsigned long blocknr;
 	struct nova_rht_entry *pentry;
-	
 	// Two last not flushed referenced entries.
 	// 0 is the last. 1 is the second to last.
 	// The two fpentries should be flushed before
@@ -71,6 +72,10 @@ struct nova_write_para_continuous {
 	unsigned long blocknr;
 	unsigned long num;
 	unsigned long blocknr_next;
+	bool append;
+	unsigned long num_blocks;
+	// srcu protected context
+	int dedup_ctx;	
 	// To keep track of last_ref_entry
 	struct nova_write_para_normal normal;
 	// Used internally
@@ -101,6 +106,9 @@ struct light_dedup_meta {
 	struct kmem_cache *revmap_entry_cache;
 
 	atomic64_t thread_num;
+	
+	rwlock_t worker_lock;
+	atomic64_t rcu_unprotected_worker_num;
 };
 
 struct kbuf_obj {
@@ -114,8 +122,8 @@ inline void incr_holders(struct nova_rht_entry *pentry);
 int light_dedup_srcu_read_lock(void);
 void light_dedup_srcu_read_unlock(int idx);
 
-int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr, const void* __user ubuf,
-	struct nova_write_para_normal *wp);
+int light_dedup_incr_ref(struct light_dedup_meta *meta, unsigned long kofs, unsigned long kbytes, 
+						const void* addr, const void* __user ubuf, struct nova_write_para_normal *wp);
 
 void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 	struct nova_rht_entry **last_pentry);

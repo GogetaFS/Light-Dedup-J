@@ -309,7 +309,12 @@ static int light_dedup_fill_blocks(
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
 	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
-	memcpy_to_pmem_nocache(xmem, wp->ubuf, wp->num * 4096);
+	if (wp->len & 0xfff) {
+		memcpy_flushcache((char *)xmem, wp->addr, PAGE_SIZE);
+	} else {
+		// aligned, must be not partial, directly copy ubuf
+		memcpy_to_pmem_nocache(xmem, wp->ubuf, wp->num * 4096);
+	}
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
 	return NO_DEDUP;
@@ -380,7 +385,10 @@ static int handle_new_block(
 	// NOTE: the first chunk of the super chunk
 	rev_entry->blocknr = wp->blocknr;
 	rev_entry->fp = fp;
-	
+	spin_lock(&meta->revmap_lock);
+	nova_insert_revmap_entry(meta, rev_entry);
+	spin_unlock(&meta->revmap_lock);
+
 	nova_dbgv("insert revmap entry %lu %llu\n", wp->blocknr, fp);
 	
 	NOVA_START_TIMING(index_insert_new_entry_t,
@@ -391,14 +399,13 @@ static int handle_new_block(
 	if (ret < 0) {
 		printk("Block %lu with fp %llx fail to insert into rhashtable "
 			"with error code %d\n", wp->blocknr, fp.value, ret);
+		spin_lock(&meta->revmap_lock);
+		nova_delete_revmap_entry(meta, rev_entry);
+		spin_unlock(&meta->revmap_lock);
 		goto fail2;
 	}
 	
 	nova_dbgv("insert fp entry %llu\n", fp);
-
-	spin_lock(&meta->revmap_lock);
-	nova_insert_revmap_entry(meta, rev_entry);
-	spin_unlock(&meta->revmap_lock);
 
 	refcount = atomic64_cmpxchg(&pentry->refcount, 0, 1);
 	BUG_ON(refcount != 0);

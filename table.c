@@ -151,7 +151,7 @@ static inline bool rht_in_pm(struct light_dedup_meta *meta, struct nova_rht_entr
 struct nova_rht_entry* rht_entry_alloc(
 	struct light_dedup_meta *meta, unsigned long blocknr)
 {
-	struct nova_rht_entry* entry;
+	struct nova_rht_entry* entry; 
 	if (atomic64_read(&meta->mem_used) > dedup_mem_threashold) {
 		struct nova_sb_info *sbi = light_dedup_meta_to_sbi(meta);
 		struct nova_rht_entry *swap_area;
@@ -164,7 +164,7 @@ struct nova_rht_entry* rht_entry_alloc(
 		entry = kmem_cache_zalloc(meta->rht_entry_cache, GFP_ATOMIC);
 		// ensure that we can use the lowest 3 bits of next_hint
 		BUG_ON(((u64)entry & TRUST_DEGREE_MASK) != 0);
-		atomic64_add(sizeof(struct nova_rht_entry), &meta->mem_used);
+		atomic64_fetch_add_relaxed(sizeof(struct nova_rht_entry), &meta->mem_used);
 	}
 	entry->atime = ktime_get_seconds();
 	return entry;
@@ -178,7 +178,7 @@ static void nova_rht_entry_free(void *entry, void *meta)
 	if (rht_in_pm(meta, pentry)) {
 		// do nothing
 	} else {
-		atomic64_sub(sizeof(struct nova_rht_entry), &((struct light_dedup_meta *)meta)->mem_used);
+		atomic64_fetch_sub_relaxed(sizeof(struct nova_rht_entry), &((struct light_dedup_meta *)meta)->mem_used);
 		kmem_cache_free(c, entry);
 	}
 }
@@ -388,6 +388,17 @@ static void print(const char *addr) {
 	printk("\n");
 }
 
+extern long __copy_user_nocache_nofence(void *dst, const void __user *src,
+				unsigned size, int zerorest);
+
+static inline int
+__copy_from_user_inatomic_nocache_nofence(void *dst, const void __user *src,
+				  unsigned size)
+{
+	kasan_check_write(dst, size);
+	return __copy_user_nocache_nofence(dst, src, size, 0);
+}
+
 static int alloc_and_fill_block(
 	struct super_block *sb,
 	struct nova_write_para_normal *wp)
@@ -407,7 +418,8 @@ static int alloc_and_fill_block(
 	if (wp->kbytes < PAGE_SIZE || wp->kofs != 0) 
 		memcpy_flushcache((char *)xmem, wp->addr, PAGE_SIZE);
 	else
-		memcpy_to_pmem_nocache((char *)xmem, wp->ubuf, PAGE_SIZE);
+		__copy_from_user_inatomic_nocache_nofence((char *)xmem, wp->ubuf, PAGE_SIZE); 
+	// rely on the fence introduced by spin_lock
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
 	return NO_DEDUP;
@@ -449,10 +461,6 @@ static int handle_new_block(
 	INIT_TIMING(index_insert_new_entry_time);
 
 	NOVA_START_TIMING(handle_new_blk_t, time);
-	ret = get_new_block(sb, wp);
-	if (ret < 0) {
-		goto fail0;
-	}
 
 	pentry = rht_entry_alloc(meta, wp->blocknr);
 	if (pentry == NULL) {
@@ -464,6 +472,11 @@ static int handle_new_block(
 	if (rev_entry == NULL) {
 		ret = -ENOMEM;
 		goto fail2;
+	}
+
+	ret = get_new_block(sb, wp);
+	if (ret < 0) {
+		goto fail0;
 	}
 
 	light_dedup_init_entry(pentry, fp, wp->blocknr);
@@ -691,7 +704,6 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 
 	if (!rev_entry) {
 		nova_warn("Block without deduplication info: %lu\n", blocknr);
-		nova_free_data_block(sb, blocknr);
 		nova_free_data_block(sb, blocknr);
 		return;
 	}
@@ -1817,7 +1829,8 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 		}
 	}
 
-	kthread_stop(sbi->swapd_thread);
+	if (sbi->swapd_thread)
+		kthread_stop(sbi->swapd_thread);
 	// TODO: we might store several entries of FP to PBN and 
 	// PBN to FP to speedup recovery
 	srcu_barrier(&srcu);

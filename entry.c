@@ -545,6 +545,7 @@ void light_dedup_init_entry(struct nova_rht_entry *pentry, struct nova_fp fp, un
 		cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD));
 	// BUG_ON(pentry->blocknr != 0);
 	pentry->blocknr = cpu_to_le64(blocknr);
+	pentry->refcount.counter = 0;
 	// held by the fp index
 	atomic_set(&pentry->num_holders, 1);
 	nova_dbgv("%s: Block %lu has %d holders now\n",

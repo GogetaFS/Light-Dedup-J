@@ -154,15 +154,16 @@ int nova_reassign_file_tree(struct super_block *sb,
 			entryc = entry;
 		else if (!nova_verify_entry_csum(sb, entry, entryc))
 			return -EIO;
-
-		if (nova_get_entry_type(entryc) != FILE_WRITE) {
+		
+		memcpy_mcsafe(&entry_copy, entryc, sizeof(struct nova_file_write_entry));
+		if (entry_copy.entry_type != FILE_WRITE) {
 			nova_dbg("%s: entry type is not write? %d\n",
 				__func__, nova_get_entry_type(entry));
 			curr_p += entry_size;
 			continue;
 		}
 
-		nova_assign_write_entry(sb, sih, entry, entryc, true);
+		nova_assign_write_entry(sb, sih, entry, &entry_copy, true);
 		curr_p += entry_size;
 	}
 
@@ -722,7 +723,7 @@ ssize_t do_nova_inplace_file_write(struct file *filp,
 			ret = -EFAULT;
 			goto out;
 		}
-		ret = light_dedup_incr_ref(&table->metas, kbuf, &wp);
+		ret = light_dedup_incr_ref(&table->metas, ubuf, kbuf, &wp);
 		if (ret < 0)
 			goto out;
 		new_blocknr = wp.blocknr;

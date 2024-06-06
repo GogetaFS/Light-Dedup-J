@@ -210,6 +210,8 @@ struct nova_sb_info {
 	unsigned long	block_start;
 	unsigned long	block_end;
 
+	unsigned long extent_table;
+
 	struct light_dedup_meta light_dedup_meta;
 };
 
@@ -241,9 +243,9 @@ nova_deref_blocks(struct super_block *sb, unsigned long blocknr,
 		num -= 1;
 		blocknr += 1;
 	}
-	if (last_pentry) {
-		nova_flush_cacheline(last_pentry, true);
-	}
+	// if (last_pentry) {
+	// 	nova_flush_cacheline(last_pentry, true);
+	// }
 }
 
 static inline struct nova_super_block

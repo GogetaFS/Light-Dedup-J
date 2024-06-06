@@ -565,6 +565,7 @@ static int advance(struct cow_write_env *env, size_t written,
 	struct nova_write_para_continuous *wp)
 {
 	u64 file_size;
+	struct nova_fp empty_fp = {0};
 	int ret;
 
 	BUG_ON(written == 0);
@@ -576,6 +577,16 @@ static int advance(struct cow_write_env *env, size_t written,
 	nova_init_file_write_entry(env->sb, env->sih, &env->entry_data,
 		env->epoch_id, env->pos >> env->sb->s_blocksize_bits, wp->num,
 		wp->blocknr, env->time, file_size);
+	
+	if (wp->num == 1) {
+		// collisioned entry
+		if (wp->normal.last_accessed == NULL)
+			env->entry_data.fp = empty_fp;
+		else
+			env->entry_data.fp = wp->normal.last_accessed->fp;
+	} else {
+		env->entry_data.fp = empty_fp;
+	}
 
 	ret = nova_append_file_write_entry(env->sb, env->pi, env->inode,
 				&env->entry_data, &env->update);
@@ -704,7 +715,7 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	put_cpu();
 	wp.normal.last_ref_entries[0] = NULL_PENTRY;
 	wp.normal.last_ref_entries[1] = NULL_PENTRY;
-	wp.normal.dirty_map_blocknr_to_pentry = NULL;
+	// wp.normal.dirty_map_blocknr_to_pentry = NULL;
 	wp.prefetched_blocknr[0] = wp.prefetched_blocknr[1] = 0;
 	if (offset != 0) {
 		bytes = env.sb->s_blocksize - offset;
@@ -722,11 +733,12 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 		}
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
-		wp.ubuf += bytes;
-		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, &wp.normal);
+		wp.normal.kbytes = bytes;
+		ret = light_dedup_incr_ref(meta, wp.ubuf, wp.kbuf, &wp.normal);
 		if (ret < 0)
 			goto err_out2;
+		wp.ubuf += bytes;
+		wp.len -= bytes;
 		wp.blocknr = wp.normal.blocknr;
 		wp.num = 1;
 		ret = advance(&env, bytes, &wp);
@@ -761,31 +773,34 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 		}
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
-		wp.ubuf += bytes;
-		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, &wp.normal);
+
+		wp.normal.kbytes = bytes;
+		ret = light_dedup_incr_ref(meta, wp.ubuf, wp.kbuf, &wp.normal);
 		if (ret < 0)
 			goto err_out2;
+		wp.ubuf += bytes;
+		wp.len -= bytes;
 		wp.blocknr = wp.normal.blocknr;
 		wp.num = 1;
 		ret = advance(&env, bytes, &wp);
 		if (ret < 0)
 			goto err_out2;
 	}
-	nova_flush_entry_if_not_null(wp.normal.last_ref_entries[0], false);
-	nova_flush_entry_if_not_null(wp.normal.last_ref_entries[1], false);
+	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[0], false);
+	// nova_flush_entry_if_not_null(wp.normal.last_ref_entries[1], false);
 	cpu = get_cpu();
 	per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp.normal.last_accessed;
 	per_cpu(last_new_fpentry_per_cpu, cpu) = wp.normal.last_new_entries[0];
 	per_cpu(stream_trust_degree_per_cpu, cpu) = wp.stream_trust_degree;
 	put_cpu();
-	if (!in_the_same_cacheline(wp.normal.last_new_entries[0],
-			wp.normal.last_new_entries[1]))
-		nova_flush_entry_if_not_null(wp.normal.last_new_entries[1],
-			false);
-	if (wp.normal.dirty_map_blocknr_to_pentry != NULL)
-		nova_flush_cacheline(wp.normal.dirty_map_blocknr_to_pentry,
-			false);
+
+	// if (!in_the_same_cacheline(wp.normal.last_new_entries[0],
+	// 		wp.normal.last_new_entries[1]))
+	// 	nova_flush_entry_if_not_null(wp.normal.last_new_entries[1],
+	// 		false);
+	// if (wp.normal.dirty_map_blocknr_to_pentry != NULL)
+	// 	nova_flush_cacheline(wp.normal.dirty_map_blocknr_to_pentry,
+	// 		false);
 
 	env.sih->i_blocks += (num_blocks <<
 		(blk_type_to_shift[env.sih->i_blk_type] -
@@ -796,9 +811,9 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 	nova_memlock_inode(env.sb, env.pi, &irq_flags);
 
 	/* Free the overlap blocks after the write is committed */
-	ret = nova_reassign_file_tree(env.sb, env.sih, env.begin_tail);
-	if (ret)
-		goto err_out2;
+	// ret = nova_reassign_file_tree(env.sb, env.sih, env.begin_tail);
+	// if (ret)
+	// 	goto err_out2;
 
 	env.inode->i_blocks = env.sih->i_blocks;
 

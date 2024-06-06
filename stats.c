@@ -177,6 +177,7 @@ const char *Timingstring[TIMING_NUM] = {
 	"write_new_entry",
 	"index_lookup",
 	"index_insert_new_entry",
+	"handle_new_block",
 	"memcmp",
 	"prefetch_next_stage_1",
 	"prefetch_next_stage_2",

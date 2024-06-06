@@ -171,6 +171,9 @@ static int nova_get_nvmm_info(struct super_block *sb,
 	sbi->replica_reserved_inodes_addr = (char *)sbi->replica_sb_addr - PAGE_SIZE;
 	sbi->block_end = sbi->num_blocks - 2;
 
+	sbi->extent_table = sbi->block_start;
+	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_fp) - 1) >> PAGE_SHIFT) + 1;
+
 	nova_dbg("%s: dev %s, phys_addr 0x%llx, virt_addr 0x%lx, size %ld, "
 		"num_blocks %lu, block_start %lu, block_end %lu\n",
 		__func__, sbi->s_bdev->bd_disk->disk_name,

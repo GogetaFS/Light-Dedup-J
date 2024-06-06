@@ -192,6 +192,7 @@ int nova_scan_entry_table(struct super_block *sb,
 #if 0
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	int ret;
+	// block allocation is valid
 	scan_region_tails(sbi, allocator, bm);
 	scan_valid_entry_count_block_tails(sbi, allocator, bm);
 	ret = entry_allocator_alloc(sbi, allocator);
@@ -338,15 +339,10 @@ void nova_write_entry(struct entry_allocator *allocator,
 	unsigned long irq_flags = 0;
 	INIT_TIMING(write_new_entry_time);
 
-	BUG_ON(atomic64_read(&pentry->refcount) != 0);
+	// BUG_ON(atomic64_read(&pentry->refcount) != 0);
 
 	nova_memunlock(sbi, &irq_flags);
 	NOVA_START_TIMING(write_new_entry_t, write_new_entry_time);
-	pentry->fp = fp;
-	atomic64_set(&pentry->next_hint,
-		cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD));
-	BUG_ON(pentry->blocknr != 0);
-	pentry->blocknr = cpu_to_le64(blocknr);
 	++allocator_cpu->allocated; // Commit the allocation
 	NOVA_END_TIMING(write_new_entry_t, write_new_entry_time);
 	nova_memlock(sbi, &irq_flags);

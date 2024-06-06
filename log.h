@@ -81,8 +81,13 @@ struct nova_file_write_entry {
 	__le64	size;           /* File size after this write */
 	__le64	epoch_id;
 	__le64	trans_id;
-	__le32	csumpadding;
-	__le32	csum;
+	union {
+		struct {
+			__le32	csumpadding;
+			__le32	csum;
+		};
+		struct nova_fp fp;
+	};
 } __attribute((__packed__));
 _Static_assert(sizeof(struct nova_file_write_entry) == 64, "!!!");
 

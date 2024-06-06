@@ -112,9 +112,10 @@ void nova_flush_entry(struct entry_allocator *allocator,
 static inline void nova_flush_entry_if_not_null(struct nova_pmm_entry *pentry,
 	bool fence)
 {
-	if (pentry != NULL_PENTRY)
-		nova_flush_cacheline(pentry, fence);
-		
+	// NOTE: do not need maintain consistency with dedup file mapping
+	
+	// if (pentry != NULL_PENTRY)
+	// 	nova_flush_cacheline(pentry, fence);
 }
 
 struct nova_pmm_entry *

@@ -723,7 +723,7 @@ ssize_t do_nova_inplace_file_write(struct file *filp,
 			ret = -EFAULT;
 			goto out;
 		}
-		ret = light_dedup_incr_ref(&table->metas, kbuf, &wp);
+		ret = light_dedup_incr_ref(&table->metas, ubuf, kbuf, &wp);
 		if (ret < 0)
 			goto out;
 		new_blocknr = wp.blocknr;

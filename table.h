@@ -32,6 +32,8 @@ struct nova_write_para_normal {
 	// Because C does not support inheritance.
 	struct nova_write_para_base base;
 	const void *addr;
+	const char __user *ubuf;
+	unsigned long kbytes;
 	unsigned long blocknr;
 	struct nova_pmm_entry *pentry;
 	// Two last not flushed referenced entries.
@@ -96,7 +98,7 @@ struct kbuf_obj {
 	void *kbuf;
 };
 
-int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr,
+int light_dedup_incr_ref(struct light_dedup_meta *meta, const void __user *ubuf, const void* addr,
 	struct nova_write_para_normal *wp);
 
 void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,

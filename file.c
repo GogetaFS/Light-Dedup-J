@@ -733,11 +733,12 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 		}
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
-		wp.ubuf += bytes;
-		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, &wp.normal);
+		wp.normal.kbytes = bytes;
+		ret = light_dedup_incr_ref(meta, wp.ubuf, wp.kbuf, &wp.normal);
 		if (ret < 0)
 			goto err_out2;
+		wp.ubuf += bytes;
+		wp.len -= bytes;
 		wp.blocknr = wp.normal.blocknr;
 		wp.num = 1;
 		ret = advance(&env, bytes, &wp);
@@ -772,11 +773,13 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 			goto err_out2;
 		}
 		NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
-		wp.ubuf += bytes;
-		wp.len -= bytes;
-		ret = light_dedup_incr_ref(meta, wp.kbuf, &wp.normal);
+
+		wp.normal.kbytes = bytes;
+		ret = light_dedup_incr_ref(meta, wp.ubuf, wp.kbuf, &wp.normal);
 		if (ret < 0)
 			goto err_out2;
+		wp.ubuf += bytes;
+		wp.len -= bytes;
 		wp.blocknr = wp.normal.blocknr;
 		wp.num = 1;
 		ret = advance(&env, bytes, &wp);

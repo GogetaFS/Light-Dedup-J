@@ -186,6 +186,18 @@ static void print(const char *addr) {
 	}
 	printk("\n");
 }
+
+extern long __copy_user_nocache_nofence(void *dst, const void __user *src,
+				unsigned size, int zerorest);
+
+static inline int
+__copy_from_user_inatomic_nocache_nofence(void *dst, const void __user *src,
+				  unsigned size)
+{
+	kasan_check_write(dst, size);
+	return __copy_user_nocache_nofence(dst, src, size, 0);
+}
+
 static int alloc_and_fill_block(
 	struct super_block *sb,
 	struct nova_write_para_normal *wp)
@@ -201,8 +213,12 @@ static int alloc_and_fill_block(
 	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
+	if (wp->kbytes & 0xfff) {
+		memcpy_flushcache(xmem, wp->addr, 4096);
+	} else {
+		__copy_from_user_inatomic_nocache_nofence(xmem, wp->ubuf, 4096);
+	}
 	// memcpy_flushcache((char *)xmem, (const char *)wp->addr, 4096);
-	memcpy_to_pmem_nocache(xmem, wp->addr, 4096);
 	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
 	// nova_memlock_block(sb, xmem, &irq_flags);
 	return 0;
@@ -240,6 +256,7 @@ static int handle_new_block(
 	int get_new_block(struct super_block *, struct nova_write_para_normal *))
 {
 	struct super_block *sb = meta->sblock;
+	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct nova_rht_entry *entry;
 	struct nova_fp fp = wp->base.fp;
 	int cpu = 0;
@@ -250,7 +267,7 @@ static int handle_new_block(
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(index_insert_new_entry_time);
 	INIT_TIMING(time);
-
+	NOVA_START_TIMING(handle_new_blk_t, time);
 	entry = rht_entry_alloc(meta);
 	if (entry == NULL) {
 		ret = -ENOMEM;
@@ -264,18 +281,17 @@ static int handle_new_block(
 		ret = PTR_ERR(pentry);
 		goto fail1;
 	}
-	NOVA_START_TIMING(handle_new_blk_t, time);
 	ret = get_new_block(sb, wp);
 	if (ret < 0) {
 		nova_alloc_entry_abort(allocator_cpu);
 		put_cpu();
 		goto fail1;
 	}
-	light_dedup_assign_pmm_entry_to_blocknr(meta, wp->blocknr, pentry);
-	
 	++allocator_cpu->allocated;
 	put_cpu(); // Calls barrier() inside
-	NOVA_END_TIMING(handle_new_blk_t, time);
+
+	__le64 *offset = meta->entry_allocator.map_blocknr_to_pentry + wp->blocknr;
+	*offset = nova_get_addr_off(sbi, pentry);
 	
 	pentry->fp = fp;
 	pentry->next_hint.counter = cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD);
@@ -305,6 +321,8 @@ static int handle_new_block(
 
 	new_dirty_fpentry(wp->last_new_entries, pentry);
 	wp->last_accessed = pentry;
+	
+	NOVA_END_TIMING(handle_new_blk_t, time);
 	// printk("Block %lu with fp %llx inserted into rhashtable %p, "
 	// 	"fpentry offset = %p\n", wp->blocknr, fp.value, rht, pentry);
 	return 0;
@@ -315,6 +333,7 @@ fail2:
 fail1:
 	nova_rht_entry_free(entry, meta->rht_entry_cache);
 fail0:
+	NOVA_END_TIMING(handle_new_blk_t, time);
 	return ret;
 }
 // True: Not equal. False: Equal
@@ -409,7 +428,7 @@ static int incr_ref_normal(struct light_dedup_meta *meta,
 {
 	return incr_ref(meta, wp, alloc_and_fill_block);
 }
-static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta,
+static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta, const void __user *ubuf,
 	const void *addr, struct nova_write_para_normal *wp)
 {
 	int ret;
@@ -418,16 +437,17 @@ static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta,
 	NOVA_START_TIMING(incr_ref_t, incr_ref_time);
 	BUG_ON(nova_fp_calc(&meta->fp_ctx, addr, &wp->base.fp));
 	wp->addr = addr;
+	wp->ubuf = ubuf;
 	ret = incr_ref_normal(meta, wp);
 	NOVA_END_TIMING(incr_ref_t, incr_ref_time);
 	return ret;
 }
-int light_dedup_incr_ref(struct light_dedup_meta *meta, const void* addr,
+int light_dedup_incr_ref(struct light_dedup_meta *meta, const void __user *ubuf, const void* addr,
 	struct nova_write_para_normal *wp)
 {
 	int ret;
 	while (1) {
-		ret = light_dedup_incr_ref_atomic(meta, addr, wp);
+		ret = light_dedup_incr_ref_atomic(meta, ubuf, addr, wp);
 		if (likely(ret != -EAGAIN))
 			break;
 		schedule();
@@ -758,7 +778,8 @@ static int copy_from_user_incr_ref(struct nova_sb_info *sbi,
 	NOVA_END_TIMING(copy_from_user_t, copy_from_user_time);
 	if (ret)
 		return -EFAULT;
-	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, wp->kbuf,
+	wp->normal.kbytes = PAGE_SIZE;
+	ret = light_dedup_incr_ref_atomic(&sbi->light_dedup_meta, wp->ubuf, wp->kbuf,
 		&wp->normal);
 	if (ret < 0)
 		return ret;

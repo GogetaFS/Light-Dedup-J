@@ -612,7 +612,7 @@ static int advance(struct cow_write_env *env, size_t written,
 	return 0;
 }
 
-static void nova_enter_dedup(struct light_dedup_meta *meta, struct nova_write_para_continuous *wp) 
+static __always_inline void nova_enter_dedup(struct light_dedup_meta *meta, struct nova_write_para_continuous *wp) 
 {
 	int cpu, ret;
 	int dedup_ctx = -1;
@@ -639,7 +639,10 @@ static void nova_enter_dedup(struct light_dedup_meta *meta, struct nova_write_pa
 	wp->prefetched_blocknr[0] = wp->prefetched_blocknr[1] = 0;
 }
 
-static void nova_exit_dedup(struct light_dedup_meta *meta, struct nova_write_para_continuous *wp, bool exception) 
+// https://stackoverflow.com/questions/4016061/why-is-inlining-considered-faster-than-a-function-call
+// doing a call can flush the instruction pipeline and force the CPU to wait for memory being fetched 
+static __always_inline void nova_exit_dedup(struct light_dedup_meta *meta, struct nova_write_para_continuous *wp, 
+										    bool exception) 
 {
 	bool append = wp->append;
 	unsigned long num_blocks = wp->num_blocks;
@@ -650,6 +653,7 @@ static void nova_exit_dedup(struct light_dedup_meta *meta, struct nova_write_par
 		// NOTE: we can not protect the last_accessed_fpentry_per_cpu by saving expensive 
 		// incr_holders and decr_holders
 		if (append && num_blocks == 1) {
+			// cross block fetch does not help
 			per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
 		} else {
 			per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp->normal.last_accessed;

@@ -21,7 +21,7 @@ struct nova_fp_strong_ctx {};
 struct nova_fp {
 	union {
 		u32 index;
-		u64 value;
+		u32 value;
 	};
 };
 
@@ -33,8 +33,8 @@ union xxh64ret {
 	u64 value;
 };
 
-_Static_assert(sizeof(struct nova_fp) == 8, "Fingerprint not 8B!");
-// _Static_assert(sizeof(struct nova_fp) == 4, "Fingerprint not 4B!");
+// _Static_assert(sizeof(struct nova_fp) == 8, "Fingerprint not 8B!");
+_Static_assert(sizeof(struct nova_fp) == 4, "Fingerprint not 4B!");
 
 static inline int nova_fp_strong_ctx_init(struct nova_fp_strong_ctx *ctx) {
 	return 0;
@@ -48,7 +48,8 @@ static inline int nova_fp_calc(struct nova_fp_strong_ctx *fp_ctx, const void *ad
 	INIT_TIMING(fp_calc_time);
 	NOVA_START_TIMING(fp_calc_t, fp_calc_time);
 	// ret.value = xxh64((const char *)addr, 4096, 0);
-	fp->value = wyhash((const char *)addr, 4096, 0, _wyp);
+	ret.value = wyhash((const char *)addr, 4096, 0, _wyp);
+	fp->value = ret.low;
 	NOVA_END_TIMING(fp_calc_t, fp_calc_time);
 	return 0;
 }

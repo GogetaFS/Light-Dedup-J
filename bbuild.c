@@ -861,6 +861,39 @@ static void free_all_failure_recovery_info(struct nova_sb_info *sbi, struct fail
 	nova_free_entry_allocator(allocator);
 }
 
+static int nova_try_gen_pmm_entry(struct nova_fp fp, unsigned long blocknr, struct failure_recovery_info *info)
+{
+	struct xatable *xat = &info->map_blocknr_pentry;
+	struct light_dedup_meta *meta = info->light_dedup_meta;
+	struct super_block *sb = meta->sblock;
+	struct nova_pmm_entry *pentry;
+	struct entry_allocator_cpu *allocator_cpu;
+	unsigned long irq_flags = 0;
+	int ret = 0, cpu;
+
+	pentry = (struct nova_pmm_entry *)xatable_load(xat, blocknr);
+	if (pentry != NULL) {
+		ret = -EEXIST;
+		goto out;
+	}
+	cpu = get_cpu();
+	allocator_cpu = &per_cpu(entry_allocator_per_cpu, cpu);
+	pentry = nova_alloc_entry(&meta->entry_allocator, allocator_cpu);
+	if (IS_ERR(pentry)) {
+		put_cpu();
+		ret = PTR_ERR(pentry);
+		goto out;
+	}
+
+	light_dedup_assign_pmm_entry_to_blocknr(meta, blocknr, pentry);
+	nova_write_entry(&meta->entry_allocator, allocator_cpu, pentry, fp,
+		blocknr);
+	put_cpu();
+
+out:
+	return ret;
+}
+
 static int upsert_blocknr(unsigned long blocknr, struct failure_recovery_info *info)
 {
 	struct xatable *xat = &info->map_blocknr_pentry;
@@ -879,7 +912,6 @@ static int upsert_blocknr(unsigned long blocknr, struct failure_recovery_info *i
 	refcount = atomic64_add_return(1, &pentry->refcount);
 	nova_memlock_range(sb, &pentry->refcount, sizeof(pentry->refcount),
 		&irq_flags);
-	nova_flush_entry(&meta->entry_allocator, pentry);
 	if (refcount == 1) {
 		ret = light_dedup_insert_rht_entry(meta, pentry->fp, pentry);
 		if (ret < 0)
@@ -1050,7 +1082,10 @@ static int nova_set_file_bm(struct super_block *sb,
 	unsigned long last_blocknr)
 {
 	struct nova_file_write_entry *entry;
-	unsigned long nvmm, pgoff;
+	struct nova_fp *extent_table = nova_sbi_blocknr_to_addr(NOVA_SB(sb), 
+								   NOVA_SB(sb)->extent_table);
+	struct nova_fp fp = {0};
+	unsigned long nvmm, pgoff, i;
 	int ret;
 
 	for (pgoff = 0; pgoff <= last_blocknr; pgoff++) {
@@ -1060,6 +1095,23 @@ static int nova_set_file_bm(struct super_block *sb,
 			ret = set_bm(nvmm, info, cpuid);
 			if (ret < 0)
 				return ret;
+			if (entry->num_pages > 1) {
+				// check extent table
+				for (i = nvmm; i < nvmm + entry->num_pages; i++) {
+					fp = extent_table[i];
+					BUG_ON(fp.value == 0);
+					nova_try_gen_pmm_entry(fp, i, info);
+					upsert_blocknr(i, info);
+				}
+			} else {
+				// in case this is a collisioned block
+				if (entry->fp.value != 0) {
+					nova_try_gen_pmm_entry(fp, i, info);
+					upsert_blocknr(nvmm, info);
+				} else {
+					nova_warn("collisioned entry found, skip...\n");
+				}
+			}
 		}
 	}
 

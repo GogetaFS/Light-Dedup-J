@@ -192,6 +192,9 @@ static int nova_get_nvmm_info(struct super_block *sb,
 	sbi->deref_table = sbi->block_start;
 	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_pmm_entry*) - 1) >> PAGE_SHIFT) + 1;
 
+	sbi->extent_table = sbi->block_start;
+	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_fp) - 1) >> PAGE_SHIFT) + 1;
+
 	nova_dbg("%s: dev %s, phys_addr 0x%llx, virt_addr 0x%lx, size %ld, "
 		"num_blocks %lu, block_start %lu, block_end %lu, nr_regions %lu\n",
 		__func__, sbi->s_bdev->bd_disk->disk_name,

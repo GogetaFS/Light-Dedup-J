@@ -60,11 +60,171 @@ struct scan_thread_data {
 	regionnr_t end;
 	struct joinable_kthread t;
 };
+static int scan_region(struct entry_allocator *allocator, struct xatable *xat,
+	void *region_start)
+{
+	struct nova_pmm_entry *pentry = (struct nova_pmm_entry *)region_start;
+	struct nova_pmm_entry *pentry_end = pentry + REAL_ENTRY_PER_REGION;
+	int16_t count = 0;
+	int ret;
+
+	for (; pentry < pentry_end; ++pentry) {
+		if (nova_pmm_entry_is_free(pentry))
+			continue;
+		// Impossible to conflict
+		// ++count;
+		// ret = xa_err(xatable_store(
+		// 	xat, nova_pmm_entry_blocknr(pentry), pentry, GFP_KERNEL));
+		// if (ret < 0)
+		// 	return ret;
+		// atomic64_set(&pentry->refcount, 0);
+		// TODO: A more elegant way
+		// *(u64 *)(&pentry->refcount) = 0;
+		
+		// clear all entries (without persistence)
+		pentry->blocknr = 0;
+	}
+	// nova_flush_buffer(region_start, REGION_SIZE, true);
+	return count;
+}
+static int __scan_worker(struct nova_sb_info *sbi, struct xatable *xat,
+	regionnr_t region_start, regionnr_t region_end)
+{
+	struct entry_allocator *allocator =
+		&sbi->light_dedup_meta.entry_allocator;
+	__le64 *blocknrs = nova_sbi_blocknr_to_addr(
+		sbi, sbi->region_blocknr_start);
+	regionnr_t i;
+	unsigned long blocknr;
+	int ret;
+
+	for (i = region_start; i < region_end; ++i) {
+		blocknr = blocknrs[i];
+		ret = scan_region(allocator, xat,
+			nova_sbi_blocknr_to_addr(sbi, blocknr));
+		if (ret < 0)
+			return ret;
+		ret = xa_err(xa_store(
+			&allocator->valid_entry,
+			blocknr,
+			xa_mk_value(ret),
+			GFP_KERNEL
+		));
+		if (ret < 0)
+			return ret;
+	}
+	return 0;
+}
+static int scan_worker(void *__para) {
+	struct scan_thread_data *data = (struct scan_thread_data *)__para;
+	return __scan_worker(data->sbi, data->xat, data->start, data->end);
+}
+static int scan_entry_table(struct super_block *sb,
+	struct entry_allocator *allocator, struct xatable *xat)
+{
+	struct nova_sb_info *sbi = NOVA_SB(sb);
+	regionnr_t region_per_thread;
+	unsigned long thread_num;
+	struct scan_thread_data *data = NULL;
+	unsigned long i;
+	regionnr_t cur_start = 0;
+	int ret = 0, ret2;
+
+	if (allocator->region_num == 0)
+		return 0;
+	region_per_thread = ceil_div_u32(allocator->region_num, sbi->cpus);
+	thread_num = ceil_div_ul(allocator->region_num, region_per_thread);
+	nova_info("Scan fingerprint entry table using %lu thread(s)\n", thread_num);
+	data = kmalloc(sizeof(data[0]) * thread_num, GFP_KERNEL);
+	if (data == NULL) {
+		ret = -ENOMEM;
+		goto out0;
+	}
+	for (i = 0; i < thread_num; ++i) {
+		data[i].sbi = sbi;
+		data[i].xat = xat;
+		data[i].start = cur_start;
+		cur_start += region_per_thread;
+		data[i].end = min_u32(cur_start, allocator->region_num);
+		data[i].t.threadfn = scan_worker;
+		data[i].t.data = data + i;
+		ret = joinable_kthread_create(&data[i].t, "scan_worker_%lu", i);
+		if (ret < 0) {
+			while (i) {
+				i -= 1;
+				joinable_kthread_abort(&data[i].t);
+			}
+			goto out1;
+		}
+	}
+	for (i = 0; i < thread_num; ++i)
+		joinable_kthread_wake_up(&data[i].t);
+	for (i = 0; i < thread_num; ++i) {
+		ret2 = __joinable_kthread_join(&data[i].t);
+		if (ret2 < 0) {
+			nova_err(sb, "%s: %lu returns %d\n", __func__, i, ret2);
+			ret = ret2;
+		}
+	}
+out1:
+	kfree(data);
+out0:
+	return ret;
+}
+static void scan_region_tails(struct nova_sb_info *sbi,
+	struct entry_allocator *allocator, unsigned long *bm)
+{
+	u64 offset = nova_get_blocknr_off(sbi->region_start);
+	__le64 *next;
+	allocator->region_num = 0;
+	do {
+		set_bit(offset / PAGE_SIZE, bm);
+		++allocator->region_num;
+		next = (__le64 *)nova_sbi_get_block(sbi,
+			offset + PAGE_SIZE - sizeof(__le64));
+		offset = le64_to_cpu(*next);
+	} while (offset);
+	allocator->last_region_tail = next;
+}
+static void scan_valid_entry_count_block_tails(struct nova_sb_info *sbi,
+	struct entry_allocator *allocator, unsigned long *bm)
+{
+	unsigned long offset = nova_get_blocknr_off(
+		sbi->first_counter_block_start);
+	__le64 *next;
+	allocator->max_region_num = 0;
+	do {
+		set_bit(offset / PAGE_SIZE, bm);
+		allocator->max_region_num +=
+			VALID_ENTRY_COUNTER_PER_BLOCK;
+		next = (__le64 *)nova_sbi_get_block(sbi,
+			offset + PAGE_SIZE - sizeof(__le64));
+		offset = *next;
+	} while (offset);
+	allocator->last_counter_block_tail = next;
+}
 int nova_scan_entry_table(struct super_block *sb,
 	struct entry_allocator *allocator, struct xatable *xat,
 	unsigned long *bm, size_t *tot)
 {
-	int ret = 0;
+	struct nova_sb_info *sbi = NOVA_SB(sb);
+	int ret;
+	// block allocation is valid
+	scan_region_tails(sbi, allocator, bm);
+	scan_valid_entry_count_block_tails(sbi, allocator, bm);
+	ret = entry_allocator_alloc(sbi, allocator);
+	if (ret < 0)
+		return ret;
+	// NOTE: do not trust any entry here, i.e., 
+	// 		 there is no valid entry, we rebuild by scan bm
+	ret = scan_entry_table(sb, allocator, xat);
+	if (ret < 0)
+		goto err_out;
+	*tot = rebuild_free_regions(sbi, allocator);
+	return 0;
+err_out:
+	nova_free_entry_allocator(allocator);
+	nova_err(sb, "%s return with error code %d\n", __func__, ret);
 	return ret;
 }
 
@@ -104,7 +264,7 @@ void nova_write_entry(struct entry_allocator *allocator, entrynr_t entrynr,
 	unsigned long irq_flags = 0;
 	INIT_TIMING(write_new_entry_time);
 
-	BUG_ON(atomic64_read(&pentry->refcount) != 0);
+	// BUG_ON(atomic64_read(&pentry->refcount) != 0);
 
 	nova_memunlock_range(sb, pentry, sizeof(*pentry), &irq_flags);
 	NOVA_START_TIMING(write_new_entry_t, write_new_entry_time);

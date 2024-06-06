@@ -365,9 +365,12 @@ static int nova_update_log_entry(struct super_block *sb, struct inode *inode,
 	case FILE_WRITE:
 		if (entry_info->inplace)
 			nova_update_write_entry(sb, entry, entry_info);
-		else
-			memcpy_to_pmem_nocache(entry, entry_info->data,
-				sizeof(struct nova_file_write_entry));
+		else {
+			// memcpy_to_pmem_nocache(entry, entry_info->data,
+			// 	sizeof(struct nova_file_write_entry));
+			memcpy(entry, entry_info->data, sizeof(struct nova_file_write_entry));
+			nova_flush_buffer(entry, sizeof(struct nova_file_write_entry), 1);
+		}
 		break;
 	case DIR_LOG:
 		if (entry_info->inplace)
@@ -429,9 +432,11 @@ static int nova_append_log_entry(struct super_block *sb,
 	entry = nova_get_block(sb, curr_p);
 	/* inode is already updated with attr */
 	nova_memunlock_range(sb, entry, size, &irq_flags);
-	memset(entry, 0, size);
-	nova_update_log_entry(sb, inode, entry, entry_info);
 	nova_inc_page_num_entries(sb, curr_p);
+
+	// memset(entry, 0, size);
+	nova_update_log_entry(sb, inode, entry, entry_info);
+	
 	nova_memlock_range(sb, entry, size, &irq_flags);
 	update->curr_entry = curr_p;
 	update->tail = curr_p + size;
@@ -453,6 +458,9 @@ static int nova_append_log_entry(struct super_block *sb,
 	}
 
 	entry_info->curr_p = curr_p;
+
+	if (type == FILE_WRITE)
+		nova_assign_write_entry(sb, sih, entry, entry, true);
 	return 0;
 }
 

@@ -7,7 +7,7 @@ obj-m += nova.o
 nova-y := balloc.o bbuild.o checksum.o dax.o dir.o file.o gc.o inode.o ioctl.o \
 	journal.o log.o mprotect.o namei.o parity.o rebuild.o snapshot.o stats.o \
 	super.o symlink.o sysfs.o perf.o nova_def.o table.o entry.o faststr.o \
-	joinable.o xatable.o queue.o generic_cache.o
+	joinable.o xatable.o queue.o generic_cache.o copy_user_64_ext.o usercopy_64_ext.o
 
 all:
 	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=`pwd`

@@ -258,7 +258,7 @@ static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 			cpu_relax();
 			write_lock(&meta->worker_lock);
 		}
-		nova_rht_entry_free(task->pentry, meta->rht_entry_cache);
+		nova_rht_entry_free(task->pentry, meta);
 		write_unlock(&meta->worker_lock);
 	}
 	kfree(task);
@@ -399,7 +399,7 @@ __copy_from_user_inatomic_nocache_nofence(void *dst, const void __user *src,
 	return __copy_user_nocache_nofence(dst, src, size, 0);
 }
 
-static int alloc_and_fill_block(
+static int fill_block(
 	struct super_block *sb,
 	struct nova_write_para_normal *wp)
 {
@@ -407,9 +407,6 @@ static int alloc_and_fill_block(
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(memcpy_time);
 
-	wp->blocknr = nova_new_data_block(sb);
-	if (wp->blocknr == 0)
-		return -ENOSPC;
 	// printk("%s: Block %ld allocated", __func__, wp->blocknr);
 	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
 	// nova_memunlock_block(sb, xmem, &irq_flags);
@@ -461,6 +458,10 @@ static int handle_new_block(
 	INIT_TIMING(index_insert_new_entry_time);
 
 	NOVA_START_TIMING(handle_new_blk_t, time);
+
+	wp->blocknr = nova_new_data_block(sb);
+	if (wp->blocknr == 0)
+		return -ENOSPC;
 
 	pentry = rht_entry_alloc(meta, wp->blocknr);
 	if (pentry == NULL) {
@@ -613,7 +614,7 @@ retry:
 static int incr_ref_normal(struct light_dedup_meta *meta,
 	struct nova_write_para_normal *wp)
 {
-	return incr_ref(meta, wp, alloc_and_fill_block);
+	return incr_ref(meta, wp, fill_block);
 }
 
 static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta, unsigned long kofs, unsigned long kbytes,

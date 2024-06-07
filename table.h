@@ -84,6 +84,13 @@ struct light_dedup_meta {
 	struct rhashtable rht;
 	struct kmem_cache *rht_entry_cache;
 	atomic64_t thread_num;
+	atomic64_t mem_used;
+};
+
+struct nova_rht_entry {
+	struct rhash_head node;
+	struct nova_fp fp;
+	struct nova_pmm_entry *pentry;
 };
 
 static inline struct light_dedup_meta *

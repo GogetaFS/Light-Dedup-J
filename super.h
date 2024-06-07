@@ -218,6 +218,8 @@ struct nova_sb_info {
 	unsigned long extent_table;
 
 	struct light_dedup_meta light_dedup_meta;
+	
+	unsigned long swap_area;
 };
 
 static inline struct nova_sb_info *NOVA_SB(struct super_block *sb)

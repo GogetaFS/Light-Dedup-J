@@ -17,6 +17,7 @@
 #include "joinable.h"
 #include "rhashtable-ext.h"
 #include "uaccess-ext.h"
+#include "table.h"
 
 // #define static _Static_assert(1, "2333");
 
@@ -42,12 +43,6 @@ blocknr_pmm_entry(struct light_dedup_meta *meta, unsigned long blocknr)
 {
 	return meta->entry_allocator.map_blocknr_to_pentry[blocknr];
 }
-
-struct nova_rht_entry {
-	struct rhash_head node;
-	struct nova_fp fp;
-	struct nova_pmm_entry *pentry;
-};
 
 static u32 nova_rht_entry_key_hashfn(const void *data, u32 len, u32 seed)
 {
@@ -80,16 +75,36 @@ const struct rhashtable_params nova_rht_params = {
 	.obj_cmpfn = nova_rht_key_entry_cmp,
 };
 
-static inline struct nova_rht_entry* rht_entry_alloc(
-	struct light_dedup_meta *meta)
+static inline bool rht_in_pm(struct light_dedup_meta *meta, struct nova_rht_entry *entry)
 {
-	return kmem_cache_alloc(meta->rht_entry_cache, GFP_ATOMIC);
+	struct nova_sb_info *sbi = light_dedup_meta_to_sbi(meta);
+	return nova_range_check_pm(sbi, entry, sizeof(struct nova_rht_entry));
 }
 
-static void nova_rht_entry_free(void *entry, void *arg)
+static inline struct nova_rht_entry* rht_entry_alloc(
+	struct light_dedup_meta *meta, unsigned long blocknr)
 {
-	struct kmem_cache *c = (struct kmem_cache *)arg;
-	kmem_cache_free(c, entry);
+	if (atomic64_read(&meta->mem_used) > dedup_mem_threshold) {
+		struct nova_sb_info *sbi = light_dedup_meta_to_sbi(meta);
+		struct nova_rht_entry *idx_swap_area = nova_sbi_blocknr_to_addr(sbi, sbi->idx_swap_area);
+		return &idx_swap_area[blocknr];
+	} else {
+		atomic64_fetch_add_relaxed(sizeof(struct nova_rht_entry), &meta->mem_used);
+		return kmem_cache_alloc(meta->rht_entry_cache, GFP_ATOMIC);
+	}
+}
+
+static void nova_rht_entry_free(void *entry, void *meta)
+{
+	struct light_dedup_meta *m = (struct light_dedup_meta *)meta;
+	struct kmem_cache *c = m->rht_entry_cache;
+
+	if (rht_in_pm(m, entry)) {
+		// do nothing
+	} else {
+		atomic64_fetch_sub_relaxed(sizeof(struct nova_rht_entry), &m->mem_used);
+		kmem_cache_free(c, entry);
+	}
 }
 
 struct pentry_free_task {
@@ -122,10 +137,10 @@ static void __rcu_rht_entry_free(struct entry_allocator *allocator,
 {
 	struct light_dedup_meta *meta =
 		entry_allocator_to_light_dedup_meta(allocator);
-	struct kmem_cache *rht_entry_cache = meta->rht_entry_cache;
+	// struct kmem_cache *rht_entry_cache = meta->rht_entry_cache;
 	struct nova_pmm_entry *pentry = entry->pentry;
 	__rcu_pentry_free(allocator, pentry);
-	nova_rht_entry_free(entry, rht_entry_cache);
+	nova_rht_entry_free(entry, meta);
 }
 
 static void rcu_rht_entry_free(struct rcu_head *head)
@@ -187,7 +202,7 @@ __copy_from_user_inatomic_nocache_nofence(void *dst, const void __user *src,
 	return __copy_user_nocache_nofence(dst, src, size, 0);
 }
 
-static int alloc_and_fill_block(
+static int fill_block(
 	struct super_block *sb,
 	struct nova_write_para_normal *wp)
 {
@@ -195,9 +210,6 @@ static int alloc_and_fill_block(
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(memcpy_time);
 
-	wp->blocknr = nova_new_data_block(sb);
-	if (wp->blocknr == 0)
-		return -ENOSPC;
 	// printk("%s: Block %ld allocated", __func__, wp->blocknr);
 	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
 	// nova_memunlock_block(sb, xmem, &irq_flags);
@@ -256,7 +268,12 @@ static int handle_new_block(
 	INIT_TIMING(index_insert_new_entry_time);
 	INIT_TIMING(time);
 	NOVA_START_TIMING(handle_new_blk_t, time);
-	entry = rht_entry_alloc(meta);
+
+	wp->blocknr = nova_new_data_block(sb);
+	if (wp->blocknr == 0)
+		return -ENOSPC;
+
+	entry = rht_entry_alloc(meta, wp->blocknr);
 	if (entry == NULL) {
 		ret = -ENOMEM;
 		goto fail0;
@@ -278,7 +295,7 @@ static int handle_new_block(
 	++allocator_cpu->allocated;
 	put_cpu(); // Calls barrier() inside
 
-	__le64 *offset = meta->entry_allocator.map_blocknr_to_pentry + wp->blocknr;
+	__le64 *offset = (__le64 *)(meta->entry_allocator.map_blocknr_to_pentry + wp->blocknr);
 	*offset = nova_get_addr_off(sbi, pentry);
 	
 	pentry->fp = fp;
@@ -313,7 +330,7 @@ fail2:
 	// zero, so is not considered readable.
 	__rcu_pentry_free(&meta->entry_allocator, pentry);
 fail1:
-	nova_rht_entry_free(entry, meta->rht_entry_cache);
+	nova_rht_entry_free(entry, meta);
 fail0:
 	NOVA_END_TIMING(handle_new_blk_t, time);
 	return ret;
@@ -403,7 +420,7 @@ retry:
 static int incr_ref_normal(struct light_dedup_meta *meta,
 	struct nova_write_para_normal *wp)
 {
-	return incr_ref(meta, wp, alloc_and_fill_block);
+	return incr_ref(meta, wp, fill_block);
 }
 static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta, const void __user *ubuf,
 	const void *addr, struct nova_write_para_normal *wp)
@@ -574,7 +591,7 @@ long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 int light_dedup_insert_rht_entry(struct light_dedup_meta *meta,
 	struct nova_fp fp, struct nova_pmm_entry *pentry)
 {
-	struct nova_rht_entry *entry = rht_entry_alloc(meta);
+	struct nova_rht_entry *entry = rht_entry_alloc(meta, pentry->blocknr);
 	int ret;
 	INIT_TIMING(insert_entry_time);
 
@@ -592,7 +609,7 @@ int light_dedup_insert_rht_entry(struct light_dedup_meta *meta,
 	if (ret < 0) {
 		printk("%s: rhashtable_insert_fast returns %d\n",
 			__func__, ret);
-		nova_rht_entry_free(entry, meta->rht_entry_cache);
+		nova_rht_entry_free(entry, meta);
 	}
 	NOVA_END_TIMING(insert_rht_entry_t, insert_entry_time);
 	return ret;
@@ -1349,11 +1366,12 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 		goto err_out2;
 	}
 	atomic64_set(&meta->thread_num, 0);
+	atomic64_set(&meta->mem_used, 0);
 	NOVA_END_TIMING(meta_alloc_t, table_init_time);
 	return 0;
 err_out2:
 	rhashtable_free_and_destroy(&meta->rht, nova_rht_entry_free,
-		meta->rht_entry_cache);
+		meta);
 err_out1:
 	nova_fp_strong_ctx_free(&meta->fp_ctx);
 err_out0:
@@ -1372,7 +1390,7 @@ void light_dedup_meta_free(struct light_dedup_meta *meta)
 
 	NOVA_START_TIMING(rht_free_t, table_free_time);
 	rhashtable_free_and_destroy_multithread(&meta->rht,
-		nova_rht_entry_free, meta->rht_entry_cache, sbi->cpus);
+		nova_rht_entry_free, meta, sbi->cpus);
 	kmem_cache_destroy(meta->rht_entry_cache);
 	NOVA_END_TIMING(rht_free_t, table_free_time);
 }

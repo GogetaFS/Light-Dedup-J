@@ -55,6 +55,7 @@ int data_parity;
 int dram_struct_csum;
 int support_clwb;
 int transition_threshold = 6;
+unsigned long dedup_mem_threshold = 1024 * 1024; 
 
 module_param(measure_timing, int, 0444);
 MODULE_PARM_DESC(measure_timing, "Timing measurement");
@@ -81,6 +82,10 @@ module_param(transition_threshold, int, 0444);
 MODULE_PARM_DESC(transition_threshold, "If the number of threads that access "
 	"NVM concurrently reaches transition_threshold, then prefetch-next "
 	"will be disabled. Default: 6");
+
+module_param(dedup_mem_threshold, ulong, 0444);
+MODULE_PARM_DESC(dedup_mem_threshold, "The threshold of memory usage for deduplication. "
+	"Default: 1024 * 1024");
 
 static struct super_operations nova_sops;
 static const struct export_operations nova_export_ops;
@@ -173,6 +178,14 @@ static int nova_get_nvmm_info(struct super_block *sb,
 
 	sbi->extent_table = sbi->block_start;
 	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_fp) - 1) >> PAGE_SHIFT) + 1;
+
+	sbi->idx_swap_area = sbi->block_start;			
+	sbi->block_start += ((sbi->num_blocks * sizeof(struct nova_rht_entry) - 1) >> PAGE_SHIFT) + 1;
+
+	sbi->log_swap_area = sbi->block_start;
+	sbi->block_start += ((MAX_NREGION(sbi) * PAGE_SIZE - 1) >> PAGE_SHIFT) + 1;
+
+	atomic64_set(&sbi->log_swap_cur_region, 0);
 
 	nova_dbg("%s: dev %s, phys_addr 0x%llx, virt_addr 0x%lx, size %ld, "
 		"num_blocks %lu, block_start %lu, block_end %lu\n",

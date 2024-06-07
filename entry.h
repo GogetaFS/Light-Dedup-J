@@ -47,6 +47,11 @@ _Static_assert(sizeof(atomic64_t) == 8, "atomic64_t not 8B!");
 #define REAL_ENTRY_PER_REGION \
 	((REGION_SIZE - sizeof(__le64)) / sizeof(struct nova_pmm_entry))
 
+#define FREE_THRESHOLD (REAL_ENTRY_PER_REGION / 2)
+
+#define MAX_NREGION(sbi) \
+	((sbi)->num_blocks / FREE_THRESHOLD + 1)
+
 #define NULL_PENTRY ((struct nova_pmm_entry *)( \
 	(REAL_ENTRY_PER_REGION - 1) * sizeof(struct nova_pmm_entry)))
 

@@ -210,6 +210,9 @@ struct nova_sb_info {
 	unsigned long	block_start;
 	unsigned long	block_end;
 
+	unsigned long log_swap_area;
+	atomic64_t log_swap_cur_region;
+	unsigned long idx_swap_area;
 	unsigned long extent_table;
 
 	struct light_dedup_meta light_dedup_meta;

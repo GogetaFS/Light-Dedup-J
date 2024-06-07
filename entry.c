@@ -16,7 +16,6 @@
 
 #define ENTRY_PER_CACHELINE (CACHELINE_SIZE / sizeof(struct nova_pmm_entry))
 // If the number of free entries in a region is greater or equal to FREE_THRESHOLD, then the region is regarded as free.
-#define FREE_THRESHOLD (REAL_ENTRY_PER_REGION / 2)
 
 DECLARE_PER_CPU(uint8_t, stream_trust_degree_per_cpu);
 DECLARE_PER_CPU(struct nova_pmm_entry *, last_new_fpentry_per_cpu);
@@ -221,8 +220,20 @@ void nova_flush_entry(struct entry_allocator *allocator,
 static int
 alloc_region(struct entry_allocator *allocator)
 {
-	char *new_region = (char *)get_zeroed_page(GFP_ATOMIC);
+	struct nova_sb_info *sbi = entry_allocator_to_sbi(allocator);
+	struct light_dedup_meta *meta = entry_allocator_to_light_dedup_meta(allocator);
+	char *new_region;
 	int ret;
+
+	if (atomic64_read(&meta->mem_used) >= dedup_mem_threshold) {
+		unsigned long region_idx = atomic64_fetch_add(1, &sbi->log_swap_cur_region);
+		unsigned long log_swap_area = nova_sbi_blocknr_to_addr(sbi, sbi->log_swap_area);
+		new_region = (char *)(log_swap_area + region_idx * PAGE_SIZE);
+	} else {
+		atomic64_fetch_add_relaxed(PAGE_SIZE, &meta->mem_used);
+		new_region = (char *)get_zeroed_page(GFP_ATOMIC);
+	}
+
 	BUG_ON(new_region == NULL || ((uint64_t)new_region & (PAGE_SIZE - 1)));
 	ret = xa_err(xa_store_bh(&allocator->valid_entry, (unsigned long)new_region,
 		xa_mk_value(0), GFP_ATOMIC));

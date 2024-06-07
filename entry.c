@@ -51,12 +51,23 @@ static int entry_allocator_alloc(struct nova_sb_info *sbi, struct entry_allocato
 int nova_init_entry_allocator(struct nova_sb_info *sbi, struct entry_allocator *allocator)
 {
 	char *regions;
+	struct light_dedup_meta *meta = entry_allocator_to_light_dedup_meta(allocator);
 	int ret;
 	allocator->region_num = 1;
 	ret = entry_allocator_alloc(sbi, allocator);
 	if (ret < 0)
 		return ret;
-	regions = (char *)get_zeroed_page(GFP_KERNEL);
+	
+	if (atomic64_read(&meta->mem_used) >= dedup_mem_threshold) {
+		unsigned long region_idx = atomic64_fetch_add(1, &sbi->log_swap_cur_region);
+		unsigned long log_swap_area = nova_sbi_blocknr_to_addr(sbi, sbi->log_swap_area);
+		regions = (char *)(log_swap_area + region_idx * PAGE_SIZE);
+		memset_nt(regions, 0, PAGE_SIZE);
+	} else {
+		atomic64_fetch_add_relaxed(PAGE_SIZE, &meta->mem_used);
+		regions = (char *)get_zeroed_page(GFP_KERNEL);
+	}
+	
 	BUG_ON(regions == NULL || ((uint64_t)regions & (PAGE_SIZE - 1)));
 	ret = xa_err(xa_store_bh(&allocator->valid_entry, (unsigned long)regions,
 		xa_mk_value(0), GFP_KERNEL));
@@ -229,6 +240,7 @@ alloc_region(struct entry_allocator *allocator)
 		unsigned long region_idx = atomic64_fetch_add(1, &sbi->log_swap_cur_region);
 		unsigned long log_swap_area = nova_sbi_blocknr_to_addr(sbi, sbi->log_swap_area);
 		new_region = (char *)(log_swap_area + region_idx * PAGE_SIZE);
+		memset_nt(new_region, 0, PAGE_SIZE);
 	} else {
 		atomic64_fetch_add_relaxed(PAGE_SIZE, &meta->mem_used);
 		new_region = (char *)get_zeroed_page(GFP_ATOMIC);

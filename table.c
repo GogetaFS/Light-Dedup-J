@@ -278,7 +278,7 @@ static int handle_new_block(
 	++allocator_cpu->allocated;
 	put_cpu(); // Calls barrier() inside
 
-	__le64 *offset = meta->entry_allocator.map_blocknr_to_pentry + wp->blocknr;
+	__le64 *offset = (__le64 *)(meta->entry_allocator.map_blocknr_to_pentry + wp->blocknr);
 	*offset = nova_get_addr_off(sbi, pentry);
 	
 	pentry->fp = fp;

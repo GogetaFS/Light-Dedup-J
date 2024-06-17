@@ -196,8 +196,10 @@ static int alloc_and_fill_block(
 	INIT_TIMING(memcpy_time);
 
 	wp->blocknr = nova_new_data_block(sb);
-	if (wp->blocknr == 0)
+	if (wp->blocknr == 0) {
+		BUG_ON(1);
 		return -ENOSPC;
+	}
 	// printk("%s: Block %ld allocated", __func__, wp->blocknr);
 	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
 	// nova_memunlock_block(sb, xmem, &irq_flags);
@@ -278,8 +280,7 @@ static int handle_new_block(
 	++allocator_cpu->allocated;
 	put_cpu(); // Calls barrier() inside
 
-	__le64 *offset = (__le64 *)(meta->entry_allocator.map_blocknr_to_pentry + wp->blocknr);
-	*offset = nova_get_addr_off(sbi, pentry);
+	light_dedup_assign_pmm_entry_to_blocknr(meta, wp->blocknr, pentry);
 	
 	pentry->fp = fp;
 	pentry->next_hint.counter = cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD);
@@ -299,8 +300,7 @@ static int handle_new_block(
 		goto fail2;
 	}
 	// printk("Block %lu inserted into rhashtable\n", wp->blocknr);
-	refcount = atomic64_cmpxchg(&pentry->refcount, 0, 1);
-	BUG_ON(refcount != 0);
+
 	new_dirty_fpentry(wp->last_new_entries, pentry);
 	wp->last_accessed = pentry;
 	

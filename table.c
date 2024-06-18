@@ -292,16 +292,12 @@ static int handle_new_block(
 		put_cpu();
 		goto fail1;
 	}
-	++allocator_cpu->allocated;
-	put_cpu(); // Calls barrier() inside
-
-	__le64 *offset = (__le64 *)(meta->entry_allocator.map_blocknr_to_pentry + wp->blocknr);
-	*offset = nova_get_addr_off(sbi, pentry);
+	light_dedup_assign_pmm_entry_to_blocknr(meta, wp->blocknr, pentry);
 	
-	pentry->fp = fp;
-	pentry->next_hint.counter = cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD);
-	pentry->blocknr = cpu_to_le64(wp->blocknr);
-	pentry->refcount.counter = 1;
+	nova_write_entry(&meta->entry_allocator, allocator_cpu, pentry, fp,
+		wp->blocknr);
+
+	put_cpu(); // Calls barrier() inside
 
 	// Now the pentry won't be allocated by others
 	assign_entry(entry, pentry, fp);
@@ -316,8 +312,10 @@ static int handle_new_block(
 		goto fail2;
 	}
 	// printk("Block %lu inserted into rhashtable\n", wp->blocknr);
+	
 	refcount = atomic64_cmpxchg(&pentry->refcount, 0, 1);
 	BUG_ON(refcount != 0);
+
 	new_dirty_fpentry(wp->last_new_entries, pentry);
 	wp->last_accessed = pentry;
 	
@@ -845,7 +843,7 @@ static void handle_hint_of_hint(struct nova_sb_info *sbi,
 	if (wp->len < PAGE_SIZE * 2)
 		return;
 	pentry = (struct nova_pmm_entry *)offset;
-	if (nova_pmm_entry_is_readable(pentry))
+	if (!nova_pmm_entry_is_readable(pentry))
 		return;
 	blocknr = nova_pmm_entry_blocknr(pentry);
 	BUG_ON(blocknr == 0);

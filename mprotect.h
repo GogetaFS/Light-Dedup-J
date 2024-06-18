@@ -45,14 +45,14 @@ static inline int nova_range_check(struct nova_sb_info *sbi, void *p,
 	return 0;
 }
 
-static inline int nova_range_check_pm(struct nova_sb_info *sbi, void *p, unsigned long len) 
+static inline bool nova_range_check_pm(struct nova_sb_info *sbi, void *p, unsigned long len) 
 {
     if (p < sbi->virt_addr ||
 			p + len > sbi->virt_addr + sbi->initsize) {
-		return -EINVAL;
+		return false;
 	}
 
-	return 0;
+	return true;
 }
 
 static inline void wprotect_disable(void)

@@ -17,10 +17,10 @@ int __joinable_kthreadfn(void *data)
 	complete(&t->entered);
 	ret = t->threadfn(t->data);
 	/* Wait for kthread_stop */
-	set_current_state(TASK_INTERRUPTIBLE);
+	// set_current_state(TASK_INTERRUPTIBLE);
 	while (!kthread_should_stop()) {
 		schedule();
-		set_current_state(TASK_INTERRUPTIBLE);
+		// set_current_state(TASK_INTERRUPTIBLE);
 	}
 	return ret;
 }

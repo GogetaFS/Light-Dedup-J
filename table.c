@@ -27,6 +27,8 @@ light_dedup_assign_pmm_entry_to_blocknr(struct light_dedup_meta *meta,
 	struct nova_sb_info *sbi = light_dedup_meta_to_sbi(meta);
 	__le64 *offset = meta->entry_allocator.map_blocknr_to_pentry + blocknr;
 	*offset = nova_get_addr_off(sbi, pentry);
+	nova_flush_cacheline(offset, false);
+
 	// if (!in_the_same_cacheline(offset, wp->dirty_map_blocknr_to_pentry) &&
 	// 	wp->dirty_map_blocknr_to_pentry != NULL)
 	// {
@@ -42,8 +44,7 @@ clear_pmm_entry_at_blocknr(struct light_dedup_meta *meta,
 	struct nova_sb_info *sbi = light_dedup_meta_to_sbi(meta);
 	__le64 *offset = meta->entry_allocator.map_blocknr_to_pentry + blocknr;
 	BUG_ON(*offset == 0);
-	// NOTE: do not flush due to dedup file mapping
-	nova_unlock_write(sbi, offset, 0);
+	nova_unlock_write_flush(sbi, offset, 0, false);
 }
 
 static inline struct nova_pmm_entry *
@@ -164,8 +165,7 @@ static void rcu_rht_entry_free(struct rcu_head *head)
 static inline void new_dirty_fpentry(struct nova_pmm_entry *last_pentries[2],
 	struct nova_pmm_entry *pentry)
 {
-	// if (!in_the_same_cacheline(last_pentries[0], last_pentries[1]))
-	// 	nova_flush_entry_if_not_null(last_pentries[1], false);
+	nova_flush_entry_if_not_null(last_pentries[1], false);
 	last_pentries[1] = last_pentries[0];
 	last_pentries[0] = pentry;
 }
@@ -526,12 +526,9 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 	NOVA_END_TIMING(decr_ref_t, decr_ref_time);
 	if (refcount != 0) {
 		// NOTE: Do not flush
-		// if (!in_the_same_cacheline(pentry, *last_pentry) &&
-		// 		*last_pentry) {
-		// 	if (*last_pentry != NULL) {
-		// 		nova_flush_cacheline(*last_pentry, false);
-		// 	}
-		// }
+		if (*last_pentry != NULL) {
+			nova_flush_cacheline(*last_pentry, false);
+		}
 		*last_pentry = pentry;
 	}
 }
@@ -742,7 +739,7 @@ static u64 incr_trust_degree(struct nova_sb_info *sbi, atomic64_t *next_hint,
 	// 	&irq_flags);
 	ret = __incr_trust_degree(next_hint, offset_ori, trust_degree);
 	// nova_sbi_memlock_range(sbi, next_hint, sizeof(*next_hint), &irq_flags);
-	// nova_flush_cacheline(next_hint, false);
+	nova_flush_cacheline(next_hint, false);
 	NOVA_END_TIMING(update_hint_t, update_hint_time);
 	return ret;
 }
@@ -760,7 +757,7 @@ static inline u64 decr_trust_degree(struct nova_sb_info *sbi,
 	ret = __decr_trust_degree(next_hint, offset_ori, offset_new,
 		trust_degree);
 	// nova_sbi_memlock_range(sbi, next_hint, sizeof(*next_hint), &irq_flags);
-	// nova_flush_cacheline(next_hint, false);
+	nova_flush_cacheline(next_hint, false);
 	NOVA_END_TIMING(update_hint_t, update_hint_time);
 	return ret;
 }
@@ -827,7 +824,7 @@ static int handle_no_hint(struct nova_sb_info *sbi,
 	}
 	// nova_sbi_memlock_range(sbi, next_hint, sizeof(*next_hint),
 	// 	&irq_flags);
-	// nova_flush_cacheline(next_hint, false);
+	nova_flush_cacheline(next_hint, false);
 	NOVA_END_TIMING(update_hint_t, update_hint_time);
 	return 0;
 }

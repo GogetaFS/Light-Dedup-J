@@ -158,8 +158,7 @@ struct nova_rht_entry* rht_entry_alloc(
 		swap_area = nova_sbi_blocknr_to_addr(sbi, sbi->swap_area); 
 		// one entry corresponds to one phys blocknr
 		entry = &swap_area[blocknr];
-		// TODO: wakeup swapd here
-		wakeup_entry_swapd(sbi);
+		// wakeup_entry_swapd(sbi);
 	} else {
 		entry = kmem_cache_zalloc(meta->rht_entry_cache, GFP_ATOMIC);
 		// ensure that we can use the lowest 3 bits of next_hint

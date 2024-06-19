@@ -103,8 +103,11 @@ int nova_scan_entry_table(struct super_block *sb,
 
 static inline bool in_the_same_cacheline(void *a, void *b)
 {
-	return (unsigned long)a / CACHELINE_SIZE ==
-		(unsigned long)b / CACHELINE_SIZE;
+	// return (unsigned long)a / CACHELINE_SIZE ==
+	// 	(unsigned long)b / CACHELINE_SIZE;
+	
+	// make sure durability ordering with crash consistency
+	return false;
 }
 
 void nova_flush_entry(struct entry_allocator *allocator,

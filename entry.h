@@ -35,7 +35,6 @@ struct nova_rht_entry {
 	// If the resulting trust degree < 0, then the offset is updated.
 	// If the trust degree < 4, then the hint is not taken.
 	atomic64_t next_hint;
-	time64_t atime;
 	atomic_t num_holders;
 };
 

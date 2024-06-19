@@ -120,7 +120,6 @@ static int nova_rht_key_entry_cmp(
 {
 	const struct nova_fp *fp = (const struct nova_fp *)arg->key;
 	struct nova_rht_entry *entry = (struct nova_rht_entry *)obj;
-	entry->atime = ktime_get_seconds(); 
 	// printk("%s: %llx, %llx", __func__, fp->value, entry->fp.value);
 	return fp->value != entry->fp.value;
 }
@@ -165,7 +164,6 @@ struct nova_rht_entry* rht_entry_alloc(
 		BUG_ON(((u64)entry & TRUST_DEGREE_MASK) != 0);
 		atomic64_fetch_add_relaxed(sizeof(struct nova_rht_entry), &meta->mem_used);
 	}
-	entry->atime = ktime_get_seconds();
 	return entry;
 }
 
@@ -1879,55 +1877,55 @@ static int nova_rht_entry_swapd(void *sb)
 		if (kthread_should_stop())
 			break;
 
-		idx = light_dedup_srcu_read_lock();
-		rhashtable_walk_enter(&meta->rht, &iter);
+		// idx = light_dedup_srcu_read_lock();
+		// rhashtable_walk_enter(&meta->rht, &iter);
 
-		rhashtable_walk_start(&iter);
-		while ((pentry = rhashtable_walk_next(&iter)) != NULL) {
-			if (IS_ERR(pentry))
-				continue;
-			// has been deleted
-			if (atomic64_read(&pentry->refcount) == 0)
-				continue;
+		// rhashtable_walk_start(&iter);
+		// while ((pentry = rhashtable_walk_next(&iter)) != NULL) {
+		// 	if (IS_ERR(pentry))
+		// 		continue;
+		// 	// has been deleted
+		// 	if (atomic64_read(&pentry->refcount) == 0)
+		// 		continue;
 			
-			if (kthread_should_stop()) {
-				rhashtable_walk_stop(&iter);
-				break;
-			}
+		// 	if (kthread_should_stop()) {
+		// 		rhashtable_walk_stop(&iter);
+		// 		break;
+		// 	}
 
-			cur_time = ktime_get_seconds();
-			if (rht_in_pm(meta, pentry)) {
-				if (cur_time - pentry->atime > swap_time_threashold) {
-					// leave me alone 
-				} else {
-					rhashtable_walk_stop(&iter);
+		// 	cur_time = ktime_get_seconds();
+		// 	if (rht_in_pm(meta, pentry)) {
+		// 		if (cur_time - pentry->atime > swap_time_threashold) {
+		// 			// leave me alone 
+		// 		} else {
+		// 			rhashtable_walk_stop(&iter);
 					
-					// ensure all related deduplication exits
-					down_write(&sbi->swapd_sem);
-					nova_rht_entry_promote(meta, pentry);
-					up_write(&sbi->swapd_sem);
+		// 			// ensure all related deduplication exits
+		// 			down_write(&sbi->swapd_sem);
+		// 			nova_rht_entry_promote(meta, pentry);
+		// 			up_write(&sbi->swapd_sem);
 					
-					rhashtable_walk_start(&iter);
-				}
-			} else {
-				if (cur_time - pentry->atime > swap_time_threashold) {
-					rhashtable_walk_stop(&iter);
+		// 			rhashtable_walk_start(&iter);
+		// 		}
+		// 	} else {
+		// 		if (cur_time - pentry->atime > swap_time_threashold) {
+		// 			rhashtable_walk_stop(&iter);
 
-					// ensure all related deduplication exits
-					down_write(&sbi->swapd_sem);
-					nova_rht_entry_demote(meta, pentry);
-					up_write(&sbi->swapd_sem);
+		// 			// ensure all related deduplication exits
+		// 			down_write(&sbi->swapd_sem);
+		// 			nova_rht_entry_demote(meta, pentry);
+		// 			up_write(&sbi->swapd_sem);
 					
-					rhashtable_walk_start(&iter);
-				} else {
-					// leave me alone
-				}
-			}
-		}
-		rhashtable_walk_stop(&iter);
+		// 			rhashtable_walk_start(&iter);
+		// 		} else {
+		// 			// leave me alone
+		// 		}
+		// 	}
+		// }
+		// rhashtable_walk_stop(&iter);
 		
-		rhashtable_walk_exit(&iter);
-		light_dedup_srcu_read_unlock(idx);
+		// rhashtable_walk_exit(&iter);
+		// light_dedup_srcu_read_unlock(idx);
 	}
 }
 

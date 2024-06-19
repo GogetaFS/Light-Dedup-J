@@ -25,7 +25,7 @@ sudo umount /mnt/pmem0
 echo Removing the old kernel module...
 sudo rmmod nova
 echo Inserting the new kernel module...
-sudo insmod nova.ko measure_timing=$timing dedup_mem_threashold=$dedup_mem_threashold
+sudo insmod nova.ko measure_timing=$timing dedup_mem_threshold=$dedup_mem_threashold
 
 sleep 1
 

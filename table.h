@@ -87,6 +87,8 @@ struct nova_write_para_continuous {
 	// For stats
 	// [0] is the lastest prefetched blocknr.
 	unsigned long prefetched_blocknr[2];
+	
+	bool seq_file;
 };
 
 #define DEDUP_SUCCESS 0
@@ -108,8 +110,8 @@ struct light_dedup_meta {
 	atomic64_t thread_num;
 	atomic64_t mem_used;
 	
-	rwlock_t worker_lock;
-	atomic64_t rcu_unprotected_worker_num;
+	// rwlock_t worker_lock;
+	// atomic64_t rcu_unprotected_worker_num;
 };
 
 struct kbuf_obj {

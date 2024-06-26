@@ -20,6 +20,7 @@
 #include <linux/uio.h>
 #include <linux/uaccess.h>
 #include <linux/falloc.h>
+#include <linux/fadvise.h>
 #include <asm/mman.h>
 #include "nova.h"
 #include "inode.h"
@@ -617,14 +618,15 @@ static __always_inline void nova_enter_dedup(struct light_dedup_meta *meta, stru
 	int cpu, ret;
 	int dedup_ctx = -1;
 
-	ret = read_trylock(&meta->worker_lock);
-	if (!ret) {
+	if (!wp->seq_file)
 		dedup_ctx = light_dedup_srcu_read_lock();
-	} else {
-		atomic64_fetch_add_relaxed(1, &meta->rcu_unprotected_worker_num);
-		// lock is held, now we release it
-		read_unlock(&meta->worker_lock);
-	}
+	// ret = read_trylock(&meta->worker_lock);
+	// if (!ret) {
+	// } else {
+	// 	atomic64_fetch_add_relaxed(1, &meta->rcu_unprotected_worker_num);
+	// 	// lock is held, now we release it
+	// 	read_unlock(&meta->worker_lock);
+	// }
 
 	wp->dedup_ctx = dedup_ctx;
 	
@@ -650,13 +652,9 @@ static __always_inline void nova_exit_dedup(struct light_dedup_meta *meta, struc
 
 	if (!exception) {
 		cpu = get_cpu();
-		// NOTE: we can not protect the last_accessed_fpentry_per_cpu by saving expensive 
-		// incr_holders and decr_holders
-		if (append && num_blocks == 1) {
-			// cross block fetch does not help
-			per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
-		} else {
+		if (!wp->seq_file) {
 			per_cpu(last_accessed_fpentry_per_cpu, cpu) = wp->normal.last_accessed;
+			// do not protect if there is no deletion.
 			if (wp->normal.last_accessed != wp->normal.first_accessed) {
 				if (wp->normal.last_accessed)
 					incr_holders(wp->normal.last_accessed);
@@ -668,13 +666,8 @@ static __always_inline void nova_exit_dedup(struct light_dedup_meta *meta, struc
 		put_cpu();
 	}
 
-	if (wp->dedup_ctx != -1) {
-		// lock is not held
+	if (!wp->seq_file)
 		light_dedup_srcu_read_unlock(wp->dedup_ctx);
-	} else {
-		// exit the section
-		atomic64_fetch_sub_relaxed(1, &meta->rcu_unprotected_worker_num);
-	}
 }
 
 /*
@@ -738,6 +731,13 @@ static ssize_t do_nova_cow_file_write(struct file *filp,
 		NOVA_END_TIMING(do_cow_write_t, cow_write_time);
 		return do_nova_inplace_file_write(filp, buf, len, ppos);
 	}
+	
+	// nova_info("fadvise, sequential?: %d, set_advise: %d\n", filp->f_mode & FMODE_RANDOM, env.sih->set_advise);
+	
+	// FIXME: seqeuntial overwrite is not supported
+	wp.seq_file = ((filp->f_mode & FMODE_RANDOM) && env.sih->set_advise) ? false : true;
+
+	// nova_info("seq file: %d\n", wp.seq_file);
 
 	ret = file_remove_privs(filp);
 	if (ret)
@@ -993,6 +993,29 @@ static int nova_dax_file_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+static int nova_fadvise(struct file *file, loff_t offset, loff_t len, int advice)
+{	
+	struct inode *inode = file->f_mapping->host;
+	struct nova_inode_info_header *sih = &NOVA_I(inode)->header;
+	
+	sih->set_advise = true;
+
+	switch (advice)
+	{
+	case POSIX_FADV_RANDOM:
+		file->f_mode |= FMODE_RANDOM;
+		break;
+	case POSIX_FADV_SEQUENTIAL:
+		file->f_mode &= ~FMODE_RANDOM;
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+
 const struct file_operations nova_dax_file_operations = {
 	.llseek			= nova_llseek,
 	.read			= nova_dax_file_read,
@@ -1006,6 +1029,7 @@ const struct file_operations nova_dax_file_operations = {
 	.flush			= nova_flush,
 	.unlocked_ioctl		= nova_ioctl,
 	.fallocate		= nova_fallocate,
+	.fadvise		= nova_fadvise,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl		= nova_compat_ioctl,
 #endif
@@ -1085,6 +1109,7 @@ const struct file_operations nova_wrap_file_operations = {
 	.open			= nova_open,
 	.fsync			= nova_fsync,
 	.flush			= nova_flush,
+	.fadvise		= nova_fadvise,
 	.unlocked_ioctl		= nova_ioctl,
 	.fallocate		= nova_fallocate,
 #ifdef CONFIG_COMPAT

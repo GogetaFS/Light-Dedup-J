@@ -161,14 +161,14 @@ static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 	struct light_dedup_meta *meta = task->meta;
 	// might be added back
 	if (atomic_read(&task->pentry->num_holders) == 0) {
-		write_lock(&meta->worker_lock);
-		while(atomic64_read(&meta->rcu_unprotected_worker_num) > 0) {
-			write_unlock(&meta->worker_lock);
-			cpu_relax();
-			write_lock(&meta->worker_lock);
-		}
-		nova_rht_entry_free(task->pentry, meta->rht_entry_cache);
-		write_unlock(&meta->worker_lock);
+		// write_lock(&meta->worker_lock);
+		// while(atomic64_read(&meta->rcu_unprotected_worker_num) > 0) {
+		// 	write_unlock(&meta->worker_lock);
+		// 	cpu_relax();
+		// 	write_lock(&meta->worker_lock);
+		// }
+		// write_unlock(&meta->worker_lock);
+		nova_rht_entry_free(task->pentry, meta);
 	}
 	kfree(task);
 }
@@ -1606,13 +1606,7 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 		ret = -ENOMEM;
 		goto err_out3;
 	}
-
 	atomic64_set(&meta->thread_num, 0);
-	
-	rwlock_init(&meta->worker_lock);
-
-	atomic64_set(&meta->rcu_unprotected_worker_num, 0);
-
 	NOVA_END_TIMING(meta_alloc_t, table_init_time);
 	return 0;
 

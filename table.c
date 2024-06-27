@@ -168,7 +168,7 @@ static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 		// 	write_lock(&meta->worker_lock);
 		// }
 		// write_unlock(&meta->worker_lock);
-		nova_rht_entry_free(task->pentry, meta);
+		nova_rht_entry_free(task->pentry, meta->rht_entry_cache);
 	}
 	kfree(task);
 }

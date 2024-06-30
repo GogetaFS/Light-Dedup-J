@@ -272,28 +272,6 @@ static void print(const char *addr) {
 	printk("\n");
 }
 
-static int alloc_and_fill_block(
-	struct super_block *sb,
-	struct nova_write_para_normal *wp)
-{
-	void *xmem;
-	// unsigned long irq_flags = 0;
-	INIT_TIMING(memcpy_time);
-
-	wp->blocknr = nova_new_data_block(sb);
-	if (wp->blocknr == 0)
-		return -ENOSPC;
-	// printk("%s: Block %ld allocated", __func__, wp->blocknr);
-	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
-	// nova_memunlock_block(sb, xmem, &irq_flags);
-	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
-	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
-	memcpy_to_pmem_nocache(xmem, wp->addr, 4096);
-	NOVA_END_TIMING(memcpy_data_block_t, memcpy_time);
-	// nova_memlock_block(sb, xmem, &irq_flags);
-	return 0;
-}
-
 static int light_dedup_fill_blocks(
 	struct super_block *sb,
 	struct nova_write_para_continuous *wp)
@@ -308,9 +286,8 @@ static int light_dedup_fill_blocks(
 	xmem = nova_blocknr_to_addr(sb, wp->blocknr);
 	// nova_memunlock_block(sb, xmem, &irq_flags);
 	NOVA_START_TIMING(memcpy_data_block_t, memcpy_time);
-	// memcpy_flushcache((char *)xmem, wp->addr, 4096);
 	if (wp->len & 0xfff) {
-		memcpy_flushcache((char *)xmem, wp->addr, PAGE_SIZE);
+		memcpy_flushcache((char *)xmem, wp->kbuf, PAGE_SIZE);
 	} else {
 		// aligned, must be not partial, directly copy ubuf
 		memcpy_to_pmem_nocache(xmem, wp->ubuf, wp->num * 4096);

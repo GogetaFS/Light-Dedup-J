@@ -1659,6 +1659,7 @@ static bool nova_try_normal_recovery(struct super_block *sb)
 	struct nova_recover_meta *recover_meta = nova_get_recover_meta(sbi);
 	int ret;
 
+	return false;
 	if (recover_meta->saved != NOVA_RECOVER_META_FLAG_COMPLETE)
 		return false;
 	if (pi->log_head == 0 || pi->log_tail == 0)

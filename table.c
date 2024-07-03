@@ -721,14 +721,13 @@ int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_
 	atomic64_set(&entry->next_hint,
 		cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD));
 
-	while (1) {
-		ret = rhashtable_insert_fast(&meta->rht, &entry->node,
-			nova_rht_params);
-		if (ret != -EBUSY)
-			break;
-		schedule();
-	};
-
+	// while (1) {
+	// 	if (ret != -EBUSY)
+	// 		break;
+	// 	schedule();
+	// };
+	ret = rhashtable_lookup_insert_key(&meta->rht, &entry->fp, &entry->node,
+		nova_rht_params);
 	if (ret < 0) {
 		printk("%s: rhashtable_insert_fast returns %d\n",
 			__func__, ret);
@@ -760,7 +759,7 @@ int light_dedup_insert_revmap_entry(struct light_dedup_meta *meta,
 	
 	rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
 	if (rev_entry) {
-		// nova_info("%s: Block %lu already exists in revmap\n", __func__, pentry->blocknr);
+		nova_info("%s: Block %lu already exists in revmap\n", __func__, pentry->blocknr);
 		BUG_ON(1);
 		return 0;
 	}

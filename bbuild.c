@@ -775,6 +775,7 @@ static int upsert_blocknr(struct nova_fp fp, unsigned long blocknr, struct failu
 	fake_pentry.fp = fp;
 	fake_pentry.refcount = 1;
 
+retry:
 	rcu_read_lock();
 	pentry = light_dedup_lookup_rht_entry(meta, &fake_pentry);
 	rcu_read_unlock();
@@ -783,8 +784,8 @@ static int upsert_blocknr(struct nova_fp fp, unsigned long blocknr, struct failu
 		refcount = atomic64_add_return(1, &pentry->refcount);
 	} else {
 		ret = light_dedup_insert_rht_entry(meta, &fake_pentry);
-		if (ret < 0)
-			return ret;
+		if (ret == -EEXIST)
+			goto retry;
 		ret = light_dedup_insert_revmap_entry(meta, &fake_pentry);
 		if (ret < 0)
 			return ret;

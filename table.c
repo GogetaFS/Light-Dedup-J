@@ -713,9 +713,13 @@ int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_
 		return -ENOMEM;
 	
 	NOVA_START_TIMING(insert_rht_entry_t, insert_entry_time);
+	
 	entry->blocknr = pentry->blocknr;
 	entry->fp = pentry->fp;
 	atomic64_set(&entry->refcount, pentry->refcount);
+	atomic_set(&entry->num_holders, 1);
+	atomic64_set(&entry->next_hint,
+		cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD));
 
 	while (1) {
 		ret = rhashtable_insert_fast(&meta->rht, &entry->node,
@@ -1712,6 +1716,7 @@ void light_dedup_meta_save(struct light_dedup_meta *meta)
 		if (pentry) {
 			decr_holders(meta, pentry);
 		}
+		per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
 	}
 
 	srcu_barrier(&srcu);

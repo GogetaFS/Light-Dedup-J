@@ -770,7 +770,9 @@ static int upsert_blocknr(struct nova_fp fp, unsigned long blocknr, struct failu
 	uint64_t refcount;
 	unsigned long irq_flags = 0;
 	int ret;
-	
+	INIT_TIMING(time);
+
+	NOVA_START_TIMING(upsert_block_t, time);
 	fake_pentry.blocknr = blocknr;
 	fake_pentry.fp = fp;
 	fake_pentry.refcount = 1;
@@ -791,6 +793,7 @@ retry:
 			return ret;
 	}
 
+	NOVA_END_TIMING(upsert_block_t, time);
 	return 0;
 }
 

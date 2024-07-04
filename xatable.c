@@ -59,3 +59,23 @@ void *xatable_load(struct xatable *xat, unsigned long index)
 	NOVA_END_TIMING(xatable_load_t, xatable_load_time);
 	return ret;
 }
+
+void *xatable_cmpxchg(struct xatable *xat, unsigned long index, void *old, void *entry, gfp_t gfp)
+{
+	unsigned long which = index & ((1UL << xat->num_bit) - 1);
+	void *ret;
+
+	index >>= xat->num_bit;
+	ret = xa_cmpxchg(xat->xa + which, index, old, entry, gfp);
+	return ret;
+}
+
+void *xatable_erase(struct xatable *xat, unsigned long index)
+{
+	unsigned long which = index & ((1UL << xat->num_bit) - 1);
+	void *ret;
+
+	index >>= xat->num_bit;
+	ret = xa_erase(xat->xa + which, index);
+	return ret;
+}

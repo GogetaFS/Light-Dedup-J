@@ -724,7 +724,7 @@ static int alloc_failure_recovery_info(struct super_block *sb,
 {
 	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct light_dedup_meta *light_dedup_meta = &sbi->light_dedup_meta;
-	size_t tot = 0;
+	size_t tot = sbi->num_blocks / 4;
 	int ret;
 	INIT_TIMING(scan_fp_entry_table_time);
 
@@ -766,29 +766,35 @@ static int upsert_blocknr(struct nova_fp fp, unsigned long blocknr, struct failu
 	struct light_dedup_meta *meta = info->light_dedup_meta;
 	struct super_block *sb = meta->sblock;
 	struct nova_rht_entry *pentry;
-	struct nova_rht_entry_pm fake_pentry;
 	uint64_t refcount;
 	unsigned long irq_flags = 0;
 	int ret;
 	INIT_TIMING(time);
 
 	NOVA_START_TIMING(upsert_block_t, time);
-	fake_pentry.blocknr = blocknr;
-	fake_pentry.fp = fp;
-	fake_pentry.refcount = 1;
 
 retry:
-	rcu_read_lock();
-	pentry = light_dedup_lookup_rht_entry(meta, &fake_pentry);
-	rcu_read_unlock();
-
-	if (pentry) {
-		refcount = atomic64_add_return(1, &pentry->refcount);
-	} else {
-		ret = light_dedup_insert_rht_entry(meta, &fake_pentry);
-		if (ret == -EEXIST)
+	pentry = (struct nova_rht_entry *)xatable_load(&meta->map_blocknr_to_pentry, blocknr);
+	if (pentry == NULL) {
+		void *ret_entry;
+		pentry = kmem_cache_zalloc(meta->rht_entry_cache, GFP_ATOMIC);
+		BUG_ON(pentry == NULL);
+		pentry->blocknr = blocknr;
+		pentry->fp = fp;
+		pentry->refcount.counter = 0;
+		pentry->num_holders.counter = 1;
+		atomic64_set(&pentry->next_hint,
+					  cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD));
+		ret_entry = xatable_cmpxchg(&meta->map_blocknr_to_pentry, blocknr, NULL, pentry, GFP_ATOMIC);
+		if (ret_entry != NULL) {
+			kmem_cache_free(meta->rht_entry_cache, pentry);
 			goto retry;
-		ret = light_dedup_insert_revmap_entry(meta, &fake_pentry);
+		}
+	}
+	
+	refcount = atomic64_add_return(1, &pentry->refcount);
+	if (refcount == 1) {
+		ret = light_dedup_insert_rht_entry_initialized(meta, pentry);
 		if (ret < 0)
 			return ret;
 	}
@@ -1591,7 +1597,7 @@ static bool nova_try_normal_recovery(struct super_block *sb)
 	struct nova_inode *pi =  nova_get_inode_by_ino(sb, NOVA_BLOCKNODE_INO);
 	struct light_dedup_recover_meta *recover_meta = light_dedup_get_recover_meta(sbi);
 	int ret;
-	return false;
+
 	if (recover_meta->saved != NOVA_RECOVER_META_FLAG_COMPLETE)
 		return false;
 	if (pi->log_head == 0 || pi->log_tail == 0)

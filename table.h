@@ -103,9 +103,10 @@ struct light_dedup_meta {
 	struct kmem_cache *rht_entry_cache;
 	// PBN to FP
 	// struct rb_root revmap;
-	struct xarray revmap;
-	spinlock_t revmap_lock;
+	struct xarray revmap;			// runtime to hold rev entries
+	// spinlock_t revmap_lock;
 	struct kmem_cache *revmap_entry_cache;
+	struct xatable map_blocknr_to_pentry; // for accelerating mount time to hold rev entries
 
 	atomic64_t thread_num;
 };
@@ -131,8 +132,7 @@ long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 
 struct nova_rht_entry *light_dedup_lookup_rht_entry(struct light_dedup_meta *meta, 
 	struct nova_rht_entry_pm *pentry);
-int light_dedup_insert_rht_entry(struct light_dedup_meta *meta,
-	struct nova_rht_entry_pm *pentry);
+int light_dedup_insert_rht_entry_initialized(struct light_dedup_meta *meta, struct nova_rht_entry *pentry);
 int light_dedup_insert_revmap_entry(struct light_dedup_meta *meta,
 	struct nova_rht_entry_pm *pentry);
 int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,

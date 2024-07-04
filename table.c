@@ -268,11 +268,11 @@ static void free_rht_entry(
 	// nova_pmm_entry_mark_to_be_freed(entry->pentry);
 
 	// NOTE: Do not delay to rcu.
-	spin_lock(&meta->revmap_lock);
+	// spin_lock(&meta->revmap_lock);
 	rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
 	nova_delete_revmap_entry(meta, rev_entry);
 	nova_revmap_entry_free(meta, rev_entry);
-	spin_unlock(&meta->revmap_lock);
+	// spin_unlock(&meta->revmap_lock);
 
 	// task = kmalloc(sizeof(struct rht_entry_free_task), GFP_ATOMIC);
 	// if (task) {
@@ -380,9 +380,9 @@ static int handle_new_block(
 	rev_entry->blocknr = wp->blocknr;
 	rev_entry->fp = fp;
 	// insert revmap unless the entry is inserted into rhashtable
-	spin_lock(&meta->revmap_lock);
+	// spin_lock(&meta->revmap_lock);
 	nova_insert_revmap_entry(meta, rev_entry);
-	spin_unlock(&meta->revmap_lock);
+	// spin_unlock(&meta->revmap_lock);
 
 	NOVA_START_TIMING(index_insert_new_entry_t,
 		index_insert_new_entry_time);
@@ -392,9 +392,9 @@ static int handle_new_block(
 	if (ret < 0) {
 		printk("Block %lu with fp %llx fail to insert into rhashtable "
 			"with error code %d\n", wp->blocknr, fp.value, ret);
-		spin_lock(&meta->revmap_lock);
+		// spin_lock(&meta->revmap_lock);
 		nova_delete_revmap_entry(meta, rev_entry);
-		spin_unlock(&meta->revmap_lock);
+		// spin_unlock(&meta->revmap_lock);
 		goto fail2;
 	}
 
@@ -585,42 +585,61 @@ void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 	struct nova_rht_entry **last_pentry)
 {
 	struct super_block *sb = meta->sblock;
+	struct nova_sb_info *sbi = NOVA_SB(sb);
 	struct rhashtable *rht = &meta->rht;
 	INIT_TIMING(decr_ref_time);
 	INIT_TIMING(index_lookup_time);
-	struct nova_rht_entry *pentry;
+	struct nova_rht_entry *pentry = NULL;
 	struct nova_revmap_entry *rev_entry;
 	int64_t refcount;
 	
 	BUG_ON(blocknr == 0);
 
-	spin_lock(&meta->revmap_lock);
+	// spin_lock(&meta->revmap_lock);
 	rev_entry = nova_search_revmap_entry(meta, blocknr);
-	spin_unlock(&meta->revmap_lock);
+	// spin_unlock(&meta->revmap_lock);
 
-	if (!rev_entry) {
-		nova_warn("Block without deduplication info: %lu\n", blocknr);
-		nova_free_data_block(sb, blocknr);
-		return;
+	if (unlikely(!rev_entry)) {
+		if (sbi->s_mount_opt & NOVA_MOUNT_FORMAT) {
+			// we can assure that there is no mapping in map_blocknr_to_pentry
+			nova_warn("Block without deduplication info: %lu\n", blocknr);
+			nova_free_data_block(sb, blocknr);
+			return;
+		} else {
+			pentry = xatable_load(&meta->map_blocknr_to_pentry, blocknr);
+			if (!pentry) {
+				nova_warn("Block without deduplication info: %lu\n", blocknr);
+				nova_free_data_block(sb, blocknr);
+				return;
+			} else {
+				xatable_erase(&meta->map_blocknr_to_pentry, blocknr);
+				rev_entry = revmap_entry_alloc(meta);
+				rev_entry->blocknr = blocknr;
+				rev_entry->fp = pentry->fp;
+				nova_insert_revmap_entry(meta, rev_entry);
+			}
+		}
 	}
 	
-	rcu_read_lock();
-	NOVA_START_TIMING(index_lookup_t, index_lookup_time);
-	pentry = rhashtable_lookup(rht, &rev_entry->fp, nova_rht_params);
-	NOVA_END_TIMING(index_lookup_t, index_lookup_time);
+	if (likely(!pentry)) {
+		rcu_read_lock();
+		NOVA_START_TIMING(index_lookup_t, index_lookup_time);
+		pentry = rhashtable_lookup(rht, &rev_entry->fp, nova_rht_params);
+		NOVA_END_TIMING(index_lookup_t, index_lookup_time);
 
-	// We have to hold the read lock because if it is a hash collision,
-	// then the entry could be freed by another thread.
-	if (!pentry) {
+		// We have to hold the read lock because if it is a hash collision,
+		// then the entry could be freed by another thread.
+		if (!pentry) {
+			rcu_read_unlock();
+			// Collision happened. Just free it.
+			printk("Fingerprint %ld can not be found in the hash table.", rev_entry->fp);
+			BUG_ON(1);
+		}
+		
+		// The entry won't be freed by others
+		// because we are referencing it.
 		rcu_read_unlock();
-		// Collision happened. Just free it.
-		printk("Fingerprint %ld can not be found in the hash table.", rev_entry->fp);
-		BUG_ON(1);
 	}
-	
-	// The entry won't be freed by others
-	// because we are referencing it.
-	rcu_read_unlock();
 	
 	NOVA_START_TIMING(decr_ref_t, decr_ref_time);
 	refcount = decr_ref(meta, pentry);
@@ -703,7 +722,22 @@ long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 	return retval < 0 ? retval : wp.base.refcount;
 }
 
-int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_entry_pm *pentry)
+int light_dedup_insert_rht_entry_initialized(struct light_dedup_meta *meta, struct nova_rht_entry *pentry)
+{
+	int ret = 0;
+
+	while (1) {
+		ret = rhashtable_insert_fast(&meta->rht, &pentry->node,
+			nova_rht_params);
+		if (ret != -EBUSY)
+			break;
+		schedule();
+	};
+
+	return ret;
+}
+
+static int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_entry_pm *pentry, struct nova_rht_entry **out_entry)
 {
 	struct nova_rht_entry *entry = rht_entry_alloc(meta);
 	int ret;
@@ -721,17 +755,16 @@ int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_
 	atomic64_set(&entry->next_hint,
 		cpu_to_le64(HINT_TRUST_DEGREE_THRESHOLD));
 
-	// while (1) {
-	// 	if (ret != -EBUSY)
-	// 		break;
-	// 	schedule();
-	// };
-	ret = rhashtable_lookup_insert_key(&meta->rht, &entry->fp, &entry->node,
-		nova_rht_params);
+	ret = light_dedup_insert_rht_entry_initialized(meta, entry);
+	// ret = rhashtable_lookup_insert_key(&meta->rht, &entry->fp, &entry->node,
+	// 	nova_rht_params);
 	if (ret < 0) {
 		printk("%s: rhashtable_insert_fast returns %d\n",
 			__func__, ret);
 		nova_rht_entry_free(entry, meta->rht_entry_cache);
+		*out_entry = NULL;
+	} else {
+		*out_entry = entry;
 	}
 
 	NOVA_END_TIMING(insert_rht_entry_t, insert_entry_time);
@@ -757,12 +790,12 @@ int light_dedup_insert_revmap_entry(struct light_dedup_meta *meta,
 {
 	struct nova_revmap_entry *rev_entry;
 	
-	rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
-	if (rev_entry) {
-		nova_info("%s: Block %lu already exists in revmap\n", __func__, pentry->blocknr);
-		BUG_ON(1);
-		return 0;
-	}
+	// rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
+	// if (rev_entry) {
+	// 	nova_info("%s: Block %lu already exists in revmap\n", __func__, pentry->blocknr);
+	// 	BUG_ON(1);
+	// 	return 0;
+	// }
 	
 	rev_entry = revmap_entry_alloc(meta);
 	if (rev_entry == NULL)
@@ -771,9 +804,9 @@ int light_dedup_insert_revmap_entry(struct light_dedup_meta *meta,
 	rev_entry->blocknr = pentry->blocknr;
 	rev_entry->fp = pentry->fp;
 	
-	spin_lock(&meta->revmap_lock);
+	// spin_lock(&meta->revmap_lock);
 	nova_insert_revmap_entry(meta, rev_entry);
-	spin_unlock(&meta->revmap_lock);
+	// spin_unlock(&meta->revmap_lock);
 
 	return 0;
 }
@@ -1476,6 +1509,7 @@ static int __rht_recover_func(struct light_dedup_meta *meta,
 	struct nova_rht_entry_pm *rec = nova_sbi_blocknr_to_addr(
 		sbi, sbi->fp2pbn_table);
 	struct nova_rht_entry_pm *pentry;
+	struct nova_rht_entry *rht_entry;
 	entrynr_t i;
 	int ret = 0;
 	// printk("entry_start = %lu, entry_end = %lu\n", (unsigned long)entry_start, (unsigned long)entry_end);
@@ -1486,12 +1520,13 @@ static int __rht_recover_func(struct light_dedup_meta *meta,
 		}
 		// nova_info("Recover fingerprint table entry %lu: blocknr = %lu, fp = %llu, refcount = %llu\n",
 		// 	(unsigned long)i, pentry->blocknr, pentry->fp, pentry->refcount);
-		ret = light_dedup_insert_rht_entry(meta, pentry);
+		ret = light_dedup_insert_rht_entry(meta, pentry, &rht_entry);
 		if (ret < 0)
 			break;
-		ret = light_dedup_insert_revmap_entry(meta, pentry);
-		if (ret < 0)
-			break;
+		xatable_store(&meta->map_blocknr_to_pentry, pentry->blocknr, rht_entry, GFP_ATOMIC);
+		// ret = light_dedup_insert_revmap_entry(meta, pentry);
+		// if (ret < 0)
+		// 	break;
 	}
 	return ret;
 }
@@ -1600,7 +1635,7 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 		goto err_out2;
 	}
 
-	spin_lock_init(&meta->revmap_lock);
+	// spin_lock_init(&meta->revmap_lock);
 	// meta->revmap = RB_ROOT;
 	xa_init(&meta->revmap);
 	meta->revmap_entry_cache = kmem_cache_create("revmap_entry_cache",
@@ -1610,9 +1645,16 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 		goto err_out3;
 	}
 	atomic64_set(&meta->thread_num, 0);
+
+	ret = xatable_init(&meta->map_blocknr_to_pentry, ceil_log_2(sbi->cpus) + 1);
+	if (ret < 0)
+		goto err_out4;
+
 	NOVA_END_TIMING(meta_alloc_t, table_init_time);
 	return 0;
 
+err_out4:
+	kmem_cache_destroy(meta->revmap_entry_cache);
 err_out3:
 	kmem_cache_destroy(meta->rht_entry_cache);
 err_out2:
@@ -1651,6 +1693,8 @@ void light_dedup_meta_free(struct light_dedup_meta *meta)
 	xa_destroy(&meta->revmap);
 	kmem_cache_destroy(meta->revmap_entry_cache);
 	NOVA_END_TIMING(revmap_free_t, revmap_free_time);
+
+	xatable_destroy(&meta->map_blocknr_to_pentry);
 }
 
 int light_dedup_meta_init(struct light_dedup_meta *meta, struct super_block* sb)

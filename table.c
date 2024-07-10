@@ -154,6 +154,21 @@ static void nova_rht_entry_free(void *entry, void *arg)
 	kmem_cache_free(c, entry);
 }
 
+static void nova_rht_and_rev_entry_free(void *entry, void *arg)
+{
+	struct nova_rht_entry *pentry = (struct nova_rht_entry *)entry;
+	struct light_dedup_meta *meta = (struct light_dedup_meta *)arg;
+	struct kmem_cache *c = (struct kmem_cache *)meta->rht_entry_cache;
+	struct nova_revmap_entry *rev_entry;
+
+	rev_entry = nova_search_revmap_entry(meta, pentry->blocknr);
+
+	if (rev_entry) {
+		nova_revmap_entry_free(meta, rev_entry);
+	}
+	kmem_cache_free(c, entry);
+}
+
 static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 {
 	struct rht_entry_free_task *task =
@@ -1682,16 +1697,16 @@ void light_dedup_meta_free(struct light_dedup_meta *meta)
 
 	NOVA_START_TIMING(rht_free_t, table_free_time);
 	rhashtable_free_and_destroy_multithread(&meta->rht,
-		nova_rht_entry_free, meta->rht_entry_cache, sbi->cpus);
+		nova_rht_and_rev_entry_free, meta, sbi->cpus);
 	kmem_cache_destroy(meta->rht_entry_cache);
+	kmem_cache_destroy(meta->revmap_entry_cache);
 	NOVA_END_TIMING(rht_free_t, table_free_time);
 
 	NOVA_START_TIMING(revmap_free_t, revmap_free_time);
-	xa_for_each(&meta->revmap, idx, revmap_entry) {
-		nova_revmap_entry_free(meta, revmap_entry);
-	}
+	// xa_for_each(&meta->revmap, idx, revmap_entry) {
+	// 	nova_revmap_entry_free(meta, revmap_entry);
+	// }
 	xa_destroy(&meta->revmap);
-	kmem_cache_destroy(meta->revmap_entry_cache);
 	NOVA_END_TIMING(revmap_free_t, revmap_free_time);
 
 	xatable_destroy(&meta->map_blocknr_to_pentry);

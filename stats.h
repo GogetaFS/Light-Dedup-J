@@ -162,7 +162,13 @@ enum timing_category {
 	delete_snapshot_t,
 	append_snapshot_file_t,
 	append_snapshot_inode_t,
-
+	
+	/* Dedup */
+	denova_title_t,
+	dedup_t,
+	fingerprint_t,
+	index_t,
+	
 	/* Sentinel */
 	TIMING_NUM,
 };

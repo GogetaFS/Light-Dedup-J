@@ -911,6 +911,9 @@ int nova_dedup_test(struct super_block *sb)
     u32 time;
     u32 valid_page_num = 0;
     ssize_t ret = 0;
+    INIT_TIMING(dedup_time);
+    INIT_TIMING(fp_time);
+    INIT_TIMING(index_time);
 
     // kmalloc buf, fingerprint
     buf = kmalloc(DATABLOCK_SIZE, GFP_KERNEL);
@@ -921,6 +924,7 @@ int nova_dedup_test(struct super_block *sb)
 			nova_info("Force Break Deduplication Loop\n");
 			break;
 		}
+        NOVA_START_TIMING(dedup_t, dedup_time);
         // Pop TWE(Target Write Entry)
         entry_address = nova_dedup_queue_get_next_entry(&target_inode_number);
         // target_inode_number should exist
@@ -963,7 +967,7 @@ int nova_dedup_test(struct super_block *sb)
             num_pages = target_entry->num_pages;
             invalid_pages = target_entry->invalid_pages;
 
-            if (num_pages > 32 || num_pages <= 0) {
+            if (num_pages > 512 || num_pages <= 0) {
                 // printk("Write Entry already claimed\n");
                 goto out2;
             }
@@ -994,11 +998,13 @@ int nova_dedup_test(struct super_block *sb)
                 left = __copy_to_user(buf, dax_mem, DATABLOCK_SIZE); // Read data page
                 nova_dedup_read_emulate(DATABLOCK_SIZE);
 
+                NOVA_START_TIMING(fingerprint_t, fp_time);
                 if (left) {
                     nova_dbg("%s ERROR!: left %lu\n", __func__, left);
                     goto out;
                 }
                 crypto_shash_digest(&sdesc->shash, buf, DATABLOCK_SIZE, fingerprint);
+                NOVA_END_TIMING(fingerprint_t, fp_time);
 
                 for (j = 0; j < FINGERPRINT_SIZE; j++) {
                     lookup_data[i].fingerprint[j] = fingerprint[j];
@@ -1116,6 +1122,7 @@ int nova_dedup_test(struct super_block *sb)
             sb_end_write(target_inode->i_sb);
         }
         iput(target_inode); // Release Inode
+        NOVA_END_TIMING(dedup_t, dedup_time);
         schedule(); /* be nice */
     } while (dedup_loop_count--);
 

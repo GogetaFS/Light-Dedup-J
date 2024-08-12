@@ -159,6 +159,12 @@ const char *Timingstring[TIMING_NUM] = {
 	"delete_snapshot",
 	"append_snapshot_filedata",
 	"append_snapshot_inode",
+	
+	/* DeNOVA */
+	"=================== DeNOVA ===================",
+	"dedup",
+	"fingerprint",
+	"index"
 };
 
 u64 Timingstats[TIMING_NUM];

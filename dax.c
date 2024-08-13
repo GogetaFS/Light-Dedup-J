@@ -262,6 +262,7 @@ void nova_init_file_write_entry(struct super_block *sb,
 	entry->mtime = cpu_to_le32(time);
 
 	entry->size = file_size;
+	entry->fp.value = 0;
 }
 
 int nova_protect_file_data(struct super_block *sb, struct inode *inode,

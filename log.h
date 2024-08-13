@@ -62,6 +62,10 @@ static inline void nova_set_entry_type(void *p, enum nova_entry_type type)
 	*(u8 *)p = type;
 }
 
+struct nova_fp {
+	uint64_t value;
+};
+
 /*
  * Write log entry.  Records a write to a contiguous range of PMEM pages.
  *
@@ -81,8 +85,14 @@ struct nova_file_write_entry {
 	__le64	size;           /* File size after this write */
 	__le64	epoch_id;
 	__le64	trans_id;
-	__le32	csumpadding;
-	__le32	csum;
+	union {
+		struct {
+			__le32	csumpadding;
+			/* For Light-Dedup */
+			__le32	csum;
+		};
+		struct nova_fp fp;
+	};
 } __attribute((__packed__));
 
 #define WENTRY(entry)	((struct nova_file_write_entry *) entry)

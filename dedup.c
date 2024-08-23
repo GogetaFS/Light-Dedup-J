@@ -1,7 +1,7 @@
 #include "dedup.h"
 #include "inode.h"
 #include "nova.h"
-
+#include "wyhash.h"
 /******************** FACT DRAM data structure *****************/
 struct DeNOVA_bm *FACT_free_list; // For allocating new  indirect access area
 
@@ -1003,7 +1003,8 @@ int nova_dedup_test(struct super_block *sb)
                     nova_dbg("%s ERROR!: left %lu\n", __func__, left);
                     goto out;
                 }
-                crypto_shash_digest(&sdesc->shash, buf, DATABLOCK_SIZE, fingerprint);
+                // crypto_shash_digest(&sdesc->shash, buf, DATABLOCK_SIZE, fingerprint);
+                *((u64 *)fingerprint) = wyhash(buf, 4096, 0, _wyp);
                 NOVA_END_TIMING(fingerprint_t, fp_time);
 
                 for (j = 0; j < FINGERPRINT_SIZE; j++) {

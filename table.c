@@ -371,6 +371,7 @@ static int handle_new_block(
 	int ret;
 	INIT_TIMING(time);
 	INIT_TIMING(index_insert_new_entry_time);
+	INIT_TIMING(new_fp2p_time);
 
 	NOVA_START_TIMING(handle_new_blk_t, time);
 	pentry = rht_entry_alloc(meta);
@@ -466,6 +467,7 @@ static int incr_ref(struct light_dedup_meta *meta,
 	// unsigned long irq_flags = 0;
 	int ret, idx = 0;
 	INIT_TIMING(index_lookup_time);
+	INIT_TIMING(update_fp2p_time);
 
 retry:
 	rcu_read_lock();
@@ -505,9 +507,11 @@ retry:
 	
 	// nova_memunlock_range(sb, &pentry->refcount,
 	// 	sizeof(pentry->refcount), &irq_flags);
-	
+
+	NOVA_START_TIMING(update_fp2p_t, update_fp2p_time);
 	wp->base.refcount = atomic64_fetch_add_unless(&pentry->refcount, 1, 0);
-	
+	NOVA_END_TIMING(update_fp2p_t, update_fp2p_time);
+
 	// nova_memlock_range(sb, &pentry->refcount,
 	// 	sizeof(pentry->refcount), &irq_flags);
 	rcu_read_unlock();

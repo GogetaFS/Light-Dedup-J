@@ -182,6 +182,8 @@ enum timing_category {
 	write_new_entry_t,
 	index_lookup_t,
 	index_insert_new_entry_t,
+	update_fp2p_t,
+	new_fp2p_t,
 	handle_new_blk_t,
 	memcmp_t,
 	prefetch_next_stage_1_t,

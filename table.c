@@ -1308,13 +1308,21 @@ get_last_accessed(struct nova_write_para_continuous *wp, bool check)
 static int handle_last_accessed_pentry(struct nova_sb_info *sbi,
 	struct nova_write_para_continuous *wp, struct nova_rht_entry *pentry)
 {
+	int ret = 0;
+	INIT_TIMING(time);
+	NOVA_START_TIMING(handle_last_t, time);
+
 	if (pentry) {
 		nova_dbgv("%s: Block %lu has been accessed before\n", __func__, pentry->blocknr);
 		BUG_ON(atomic64_read(&pentry->refcount) == 0);
-		return handle_hint(sbi, wp, &pentry->next_hint);
+		ret = handle_hint(sbi, wp, &pentry->next_hint);
 	} else {
-		return copy_from_user_incr_ref(sbi, wp);
+		ret = copy_from_user_incr_ref(sbi, wp);
 	}
+	
+	NOVA_END_TIMING(handle_last_t, time);
+
+	return ret;
 }
 
 struct entry_node {
@@ -1333,6 +1341,7 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 	int ret = DEDUP_SUCCESS, num = 0;
 	// unsigned long irq_flags = 0;
 	INIT_TIMING(time);
+	INIT_TIMING(oet_time);
 
 	NOVA_START_TIMING(incr_ref_continuous_t, time);
 	// Unlock here because it seems that wprotect will affect prefetching
@@ -1364,6 +1373,7 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 		num++;
 	}
 	
+	NOVA_START_TIMING(oet_t, oet_time);
 	struct nova_fp *extent_table = nova_sbi_blocknr_to_addr(sbi, sbi->extent_table);
 	list_for_each_entry_safe(node, tmp, &entry_list, list) {
 		// if num == 1, we embed fp into file write entry.
@@ -1393,7 +1403,8 @@ int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 		// NOTE: we do not need fence here as persisting write entry require the fence
 		//       and the entry is not commit until the log tail is updated atomically
 	}
-
+	NOVA_END_TIMING(oet_t, oet_time);
+	
 	// nova_memlock(sbi, &irq_flags);
 	NOVA_END_TIMING(incr_ref_continuous_t, time);
 	return ret;

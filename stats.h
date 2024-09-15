@@ -185,6 +185,8 @@ enum timing_category {
 	update_fp2p_t,
 	new_fp2p_t,
 	handle_new_blk_t,
+	handle_last_t,
+	oet_t,
 	memcmp_t,
 	prefetch_next_stage_1_t,
 	prefetch_next_stage_2_t,

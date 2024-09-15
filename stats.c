@@ -180,6 +180,8 @@ const char *Timingstring[TIMING_NUM] = {
 	"update_fp2p",
 	"new_fp2p",
 	"handle_new_blk",
+	"handle_last",
+	"oet",
 	"memcmp",
 	"prefetch_next_stage_1",
 	"prefetch_next_stage_2",

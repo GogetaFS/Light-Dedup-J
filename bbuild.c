@@ -761,6 +761,14 @@ static void free_all_failure_recovery_info(struct nova_sb_info *sbi, struct fail
 	// nova_free_entry_allocator(allocator);
 }
 
+/**
+ * @brief update or insert GLT entry
+ * 
+ * @param fp fp from the LFP entries or OFT entries
+ * @param blocknr the blocknr to be updated or inserted
+ * @param info global parameters
+ * @return int 0 if success, -ret if failed
+ */
 static int upsert_blocknr(struct nova_fp fp, unsigned long blocknr, struct failure_recovery_info *info)
 {
 	struct light_dedup_meta *meta = info->light_dedup_meta;

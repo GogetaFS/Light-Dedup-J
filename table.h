@@ -126,6 +126,7 @@ int light_dedup_incr_ref(struct light_dedup_meta *meta, unsigned long kofs, unsi
 
 void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 	struct nova_rht_entry **last_pentry);
+// Deprecated
 long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 	unsigned long blocknr);
 
@@ -143,8 +144,11 @@ int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 void light_dedup_meta_free(struct light_dedup_meta *meta);
 int light_dedup_meta_init(struct light_dedup_meta *meta,
 	struct super_block* sblock);
+
+//Deprecated
 int light_dedup_meta_restore(struct light_dedup_meta *meta,
 	struct super_block *sb);
+//Deprecated
 void light_dedup_meta_save(struct light_dedup_meta *meta);
 
 #endif

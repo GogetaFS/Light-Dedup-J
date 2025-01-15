@@ -173,6 +173,12 @@ static void rcu_rht_entry_free_only_entry(struct rcu_head *head)
 	kfree(task);
 }
 
+/**
+ * @brief Decrease the reference count of a GLT entry, avoiding accessing the freed entry.
+ * 
+ * @param meta GogetaFS runtime structure
+ * @param pentry the GLT entry to be decreased
+ */
 inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_entry *pentry)
 {
 	if (atomic_dec_and_test(&pentry->num_holders)) {
@@ -195,6 +201,11 @@ inline void decr_holders(struct light_dedup_meta *meta, struct nova_rht_entry *p
 		__func__, pentry->blocknr, atomic_read(&pentry->num_holders));
 }
 
+/**
+ * @brief Increase the reference count of a GLT entry.
+ * 
+ * @param pentry the GLT entry to be increased
+ */
 inline void incr_holders(struct nova_rht_entry *pentry)
 {
 	atomic_inc(&pentry->num_holders);
@@ -529,6 +540,17 @@ static int light_dedup_incr_ref_atomic(struct light_dedup_meta *meta, unsigned l
 	return ret;
 }
 
+/**
+ * @brief Deduplicate one block of data.
+ * 
+ * @param meta GogetaFS runtime structure
+ * @param kofs The offset from the kernel buffer
+ * @param kbytes The bytes to write
+ * @param addr kernel buffer address
+ * @param ubuf user buffer address
+ * @param wp write parameters
+ * @return int 0 deduplication success, 1 no deduplication, others failed
+ */
 int light_dedup_incr_ref(struct light_dedup_meta *meta, unsigned long kofs, unsigned long kbytes, 
 						const void* addr, const void* __user ubuf, struct nova_write_para_normal *wp)
 {
@@ -581,6 +603,13 @@ static int64_t decr_ref(struct light_dedup_meta *meta,
 	return refcount;
 }
 
+/**
+ * @brief Try to remove a duplicated block. If the refcount is 1, then remove it.
+ * 
+ * @param meta GogetaFS runtime structure
+ * @param blocknr the blocknr to be removed
+ * @param last_pentry the last accessed entry, pass out
+ */
 void light_dedup_decr_ref(struct light_dedup_meta *meta, unsigned long blocknr,
 	struct nova_rht_entry **last_pentry)
 {
@@ -684,7 +713,7 @@ static int decr_ref_1(
 	// printk(KERN_WARNING " found at %d, ref %llu\n", leaf_index, refcount);
 	return 0;
 }
-
+// Deprecated
 long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 	unsigned long blocknr)
 {
@@ -703,6 +732,13 @@ long light_dedup_decr_ref_1(struct light_dedup_meta *meta, const void *addr,
 	return retval < 0 ? retval : wp.base.refcount;
 }
 
+/**
+ * @brief Insert a GLT entry into the rhashtable. Used for recovery
+ * 
+ * @param meta GogetaFS runtime structure
+ * @param pentry the parameter entry that holds the FP and blocknr
+ * @return int 0 if success, others if failed
+ */
 int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_entry_pm *pentry)
 {
 	struct nova_rht_entry *entry = rht_entry_alloc(meta);
@@ -735,7 +771,13 @@ int light_dedup_insert_rht_entry(struct light_dedup_meta *meta, struct nova_rht_
 	return ret;
 }
 
-// please hold the rcu look outside
+/**
+ * @brief Lookup a GLT entry in the rhashtable. Please hold the rcu lock outside. Used for recovery
+ * 
+ * @param meta GogetaFS runtime structure
+ * @param pentry the entry holds the FP. 
+ * @return struct nova_rht_entry* the GLT entry if found, NULL otherwise
+ */
 struct nova_rht_entry *light_dedup_lookup_rht_entry(struct light_dedup_meta *meta, struct nova_rht_entry_pm *pentry)
 {
 	struct rhashtable *rht = &meta->rht;
@@ -749,6 +791,13 @@ struct nova_rht_entry *light_dedup_lookup_rht_entry(struct light_dedup_meta *met
 	return entry;
 }
 
+/**
+ * @brief Insert a revmap entry into the revmap. The revmap maintains a mapping from blocknr to FP for fast deletion. This function is used for recovery.
+ * 
+ * @param meta GogetaFS runtime structure
+ * @param pentry the parameter entry that holds the FP and blocknr
+ * @return int 0 if success, others if failed
+ */
 int light_dedup_insert_revmap_entry(struct light_dedup_meta *meta,
 	struct nova_rht_entry_pm *pentry)
 {
@@ -1267,6 +1316,13 @@ struct entry_node {
 	struct nova_rht_entry *last_pentry;
 };
 
+/**
+ * @brief Deduplicate continuous data blocks.
+ * 
+ * @param sbi NOVA super block info
+ * @param wp write parameters
+ * @return int 0 deduplication success, 1 no deduplication, others failed
+ */
 int light_dedup_incr_ref_continuous(struct nova_sb_info *sbi,
 	struct nova_write_para_continuous *wp)
 {
@@ -1568,8 +1624,14 @@ static void free_kbuf(struct llist_node *node)
 	kfree(obj);
 }
 
-// nelem_hint: If 0 then use default
-// entry_allocator is left for the caller to initialize
+/**
+ * @brief init GogetaFS runtime structure when recovery
+ * 
+ * @param meta the runtime structure
+ * @param sb file system super block
+ * @param nelem_hint populate the rhashtable with this number of elements
+ * @return int 0 on success, -errno on failure
+ */
 int light_dedup_meta_alloc(struct light_dedup_meta *meta,
 	struct super_block *sb, size_t nelem_hint)
 {
@@ -1650,6 +1712,13 @@ void light_dedup_meta_free(struct light_dedup_meta *meta)
 	NOVA_END_TIMING(revmap_free_t, revmap_free_time);
 }
 
+/**
+ * @brief Similar to `light_dedup_meta_alloc`, but do not populate the rhashtable, used when first mount file system
+ * 
+ * @param meta GogetaFS runtime structure
+ * @param sb file system super block
+ * @return int 0 on success, -errno on failure
+ */
 int light_dedup_meta_init(struct light_dedup_meta *meta, struct super_block* sb)
 {
 	struct nova_sb_info *sbi = NOVA_SB(sb);
@@ -1670,6 +1739,7 @@ int light_dedup_meta_init(struct light_dedup_meta *meta, struct super_block* sb)
 	return 0;
 }
 
+// Deprecated
 int light_dedup_meta_restore(struct light_dedup_meta *meta,
 	struct super_block *sb)
 {
@@ -1698,6 +1768,7 @@ err_out0:
 	return ret;
 }
 
+// Deprecated
 void light_dedup_meta_save(struct light_dedup_meta *meta)
 {
 	struct super_block *sb = meta->sblock;

@@ -110,22 +110,27 @@ struct entry_allocator {
 	((PAGE_SIZE - sizeof(__le64)) / sizeof(uint16_t))
 
 void light_dedup_init_hint_stream(struct super_block *sb);
+// Deprecated
 int nova_init_entry_allocator(struct nova_sb_info *sbi, struct entry_allocator *allocator);
+// Deprecated
 int nova_entry_allocator_recover(struct nova_sb_info *sbi, struct entry_allocator *allocator);
+// Deprecated
 void nova_free_entry_allocator(struct entry_allocator *allocator);
+// Deprecated
 int nova_scan_entry_table(struct super_block *sb,
 	struct entry_allocator *allocator, struct xatable *xat,
 	unsigned long *bm, size_t *tot);
-
+// Deprecated
 static inline bool in_the_same_cacheline(void *a, void *b)
 {
 	return (unsigned long)a / CACHELINE_SIZE ==
 		(unsigned long)b / CACHELINE_SIZE;
 }
 
+// Deprecated
 void nova_flush_entry(struct entry_allocator *allocator,
 	struct nova_pmm_entry *pentry);
-
+// Deprecated
 static inline void nova_flush_entry_if_not_null(struct nova_pmm_entry *pentry,
 	bool fence)
 {
@@ -134,23 +139,27 @@ static inline void nova_flush_entry_if_not_null(struct nova_pmm_entry *pentry,
 		
 }
 
+// Deprecated
 struct nova_pmm_entry *
 nova_alloc_entry(struct entry_allocator *allocator,
 	struct entry_allocator_cpu *allocator_cpu);
 static inline void
+// Deprecated
 nova_alloc_entry_abort(struct entry_allocator_cpu *allocator_cpu)
 {
 }
+// Deprecated
 void light_dedup_write_entry(struct entry_allocator *allocator,
 	struct entry_allocator_cpu *allocator_cpu,
 	struct nova_pmm_entry *pentry, struct nova_fp fp,
 	unsigned long blocknr);
 void light_dedup_init_entry(struct nova_rht_entry *pentry, struct nova_fp fp, unsigned long blocknr);
+// Deprecated
 void nova_free_entry(struct entry_allocator *allocator,
 	struct nova_pmm_entry *pentry);
-
+// Deprecated
 void nova_save_entry_allocator(struct super_block *sb, struct entry_allocator *allocator);
-
+// Deprecated
 int __nova_entry_allocator_stats(struct nova_sb_info *sbi, struct entry_allocator *allocator);
 
 #endif // __NOVA_ENTRY_H

@@ -30,6 +30,11 @@ static void light_dedup_init_hint_stream_per_cpu(struct super_block *sb, int cpu
 	per_cpu(last_accessed_fpentry_per_cpu, cpu) = NULL;
 }
 
+/**
+ * @brief Initialize the hint stream for all CPUs.
+ * 
+ * @param sb The super block.
+ */
 void light_dedup_init_hint_stream(struct super_block *sb)
 {
 	int cpu;
@@ -533,6 +538,13 @@ void nova_flush_entry(struct entry_allocator *allocator,
 // 	return pentry;
 // }
 
+/**
+ * @brief Initialize a new GLT entry
+ * 
+ * @param pentry the entry to be initialized
+ * @param fp the fingerprint
+ * @param blocknr the block number
+ */
 void light_dedup_init_entry(struct nova_rht_entry *pentry, struct nova_fp fp, unsigned long blocknr)
 {
 	INIT_TIMING(write_new_entry_time);
